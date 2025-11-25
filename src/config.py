@@ -8,6 +8,8 @@ SCREEN_HEIGHT = 600
 AGENT_RADIUS = 15
 MAX_SPEED = 150  # pixels/sec
 GOAL_THRESHOLD = 20
+DEFAULT_NUM_AGENTS = 4
+AGENT_COLORS = ["blue", "red", "green", "orange", "purple", "cyan", "magenta", "yellow"]
 
 # --- RRT Planner ---
 RRT_ITERATIONS = 500
