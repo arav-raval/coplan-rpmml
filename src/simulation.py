@@ -10,16 +10,29 @@ from src.config import (
     SCREEN_WIDTH, SCREEN_HEIGHT, MAX_SPEED,
     PREDICTION_HORIZON, PREDICTION_DT, COLLISION_DISTANCE,
     AGENT_RADIUS, DEFAULT_NUM_AGENTS, AGENT_COLORS,
-    COMMUNICATION_TRIGGER_DISTANCE
+    POSITION_MARGIN, MIN_POSITION_SEPARATION, MIN_TRAVEL_DISTANCE,
+    MAX_MSG_LENGTH_STEPS, SIMULATION_FPS, REPLAN_COOLDOWN_STEPS
 )
 from src.world import create_space, create_boundaries
 from src.agents import Agent
 from src.metrics import MetricsCollector, SimulationMetrics
 
 
-def generate_random_positions(n_agents, width, height, margin=50):
-    """Generate random start and goal positions for agents."""
-    min_separation = 80
+def generate_random_positions(n_agents, width, height, margin=None, seed=None):
+    """Generate random start and goal positions for agents.
+    
+    Args:
+        n_agents: Number of agents
+        width: Screen width
+        height: Screen height
+        margin: Margin from edges (defaults to POSITION_MARGIN from config)
+        seed: Random seed (optional, for deterministic generation)
+    """
+    if seed is not None:
+        random.seed(seed)
+    if margin is None:
+        margin = POSITION_MARGIN
+    min_separation = MIN_POSITION_SEPARATION
     positions = []
     
     for _ in range(n_agents):
@@ -50,7 +63,7 @@ def generate_random_positions(n_agents, width, height, margin=50):
             goal = (goal_x, goal_y)
             
             dist = ((goal[0] - start[0])**2 + (goal[1] - start[1])**2)**0.5
-            if dist > 200:
+            if dist > MIN_TRAVEL_DISTANCE:
                 break
             attempts += 1
         
@@ -60,7 +73,7 @@ def generate_random_positions(n_agents, width, height, margin=50):
 
 
 def predict_collision_pair(agent1, agent2, horizon_seconds):
-    """Check if two agents will collide."""
+    """Check if two agents will collide within the prediction horizon."""
     if not agent1.path or agent1.path_index >= len(agent1.path):
         return False
     if not agent2.path or agent2.path_index >= len(agent2.path):
@@ -70,6 +83,10 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
     sim_idx1 = agent1.path_index
     sim_pos2 = pymunk.Vec2d(*agent2.body.position)
     sim_idx2 = agent2.path_index
+
+    # Check initial distance (agents might already be very close)
+    if sim_pos1.get_distance(sim_pos2) < COLLISION_DISTANCE:
+        return True
 
     t = 0.0
     while t < horizon_seconds:
@@ -108,7 +125,7 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
 
 def run_simulation(
     comm_enabled: bool = True,
-    broadcast_frequency: float = 0.67,
+    broadcast_interval_steps: int = 90,
     comm_range: float = 250.0,
     msg_length: int = 10,
     n_agents: int = DEFAULT_NUM_AGENTS,
@@ -121,9 +138,9 @@ def run_simulation(
     
     Args:
         comm_enabled: Whether agents communicate
-        broadcast_frequency: How often agents can replan (Hz)
+        broadcast_interval_steps: Steps between broadcasts (smaller = more frequent)
         comm_range: Distance at which agents can communicate
-        msg_length: Number of waypoints to share per message
+        msg_length: Number of waypoints to share per message (capped at MAX_MSG_LENGTH_STEPS)
         n_agents: Number of agents in simulation
         seed: Random seed for reproducibility
         max_time: Maximum simulation time before timeout
@@ -132,16 +149,20 @@ def run_simulation(
     Returns:
         SimulationMetrics with all collected data
     """
-    random.seed(seed)
-    
-    replan_cooldown_time = 1.0 / broadcast_frequency if broadcast_frequency > 0 else float('inf')
+    # Warn if message length exceeds prediction horizon (information beyond horizon is irrelevant)
+    if msg_length > MAX_MSG_LENGTH_STEPS:
+        if verbose:
+            print(f"  [WARNING] msg_length={msg_length} exceeds MAX_MSG_LENGTH_STEPS={MAX_MSG_LENGTH_STEPS}")
+            print(f"           Information beyond prediction horizon is irrelevant. Capping to {MAX_MSG_LENGTH_STEPS}.")
+    # Use configured cooldown value (not tied to communication frequency)
+    replan_cooldown_value = REPLAN_COOLDOWN_STEPS
     
     # Setup world
     space = create_space()
     static_obstacles = create_boundaries(space, SCREEN_WIDTH, SCREEN_HEIGHT)
     
-    # Generate random positions and create agents
-    positions = generate_random_positions(n_agents, SCREEN_WIDTH, SCREEN_HEIGHT)
+    # Generate random positions and create agents (seed ensures deterministic generation)
+    positions = generate_random_positions(n_agents, SCREEN_WIDTH, SCREEN_HEIGHT, seed=seed)
     
     agents = []
     for i, (start, goal) in enumerate(positions):
@@ -152,37 +173,62 @@ def run_simulation(
         agents.append(agent)
     
     # Initial planning
-    for agent in agents:
+    if verbose:
+        print(f"  Initial planning for {n_agents} agents...")
+    
+    for i, agent in enumerate(agents):
         agent.plan_path()
+        if verbose and agent.path:
+            print(f"    Agent {i}: {len(agent.path)} waypoints")
+        elif verbose:
+            print(f"    Agent {i}: ❌ FAILED")
     
     # Check if any planning failed
     if any(agent.path is None for agent in agents):
+        if verbose:
+            print(f"  ⚠️  Initial planning failed for some agents")
         metrics = SimulationMetrics()
         metrics.timed_out = True
         return metrics
     
+    # Convert broadcast_interval_steps to Hz for MetricsCollector (for cost calculation)
+    broadcast_frequency_hz = SIMULATION_FPS / broadcast_interval_steps if broadcast_interval_steps > 0 else 0.0
+    
     # Metrics collection (uses first two agents for backward compatibility)
     collector = MetricsCollector(
-        broadcast_frequency=broadcast_frequency,
+        broadcast_frequency=broadcast_frequency_hz,
         comm_range=comm_range,
         msg_length=msg_length
     )
     
-    # Per-agent cooldowns
-    replan_cooldowns = {i: 0.0 for i in range(n_agents)}
+    # Per-agent cooldowns (in steps)
+    replan_cooldowns = {i: 0 for i in range(n_agents)}
+    
+    # Track collision pairs to count events, not frames
+    active_collision_pairs = set()  # Pairs currently in collision
+    
+    # Track last communication step for each agent pair
+    last_comm_step = {}  # (i, j) -> step_number
+    
+    # Debug: Track communication attempts
+    comm_checks_total = 0
+    comm_checks_allowed = 0
+    comm_checks_skipped = 0
     
     # Simulation loop
-    dt = 1.0 / 60.0
+    dt = 1.0 / SIMULATION_FPS
     current_time = 0.0
+    step_count = 0
     
     while current_time < max_time:
         space.step(dt)
         current_time += dt
+        step_count += 1
         
-        # Update cooldowns
+        # Update cooldowns (decrement by 1 step)
         for i in replan_cooldowns:
             if replan_cooldowns[i] > 0:
-                replan_cooldowns[i] -= dt
+                replan_cooldowns[i] -= 1
         
         # Communication-based replanning (check ALL pairs)
         if comm_enabled:
@@ -190,41 +236,108 @@ def run_simulation(
                 agent_i = agents[i]
                 agent_j = agents[j]
                 
-                # Skip if either agent is done
-                if (agent_i.path is None or agent_i.path_index >= len(agent_i.path) or
-                    agent_j.path is None or agent_j.path_index >= len(agent_j.path)):
+                # Check which agents are done
+                agent_i_done = (agent_i.path is None or agent_i.path_index >= len(agent_i.path))
+                agent_j_done = (agent_j.path is None or agent_j.path_index >= len(agent_j.path))
+                
+                # Skip if BOTH agents are done (no need to check this pair)
+                if agent_i_done and agent_j_done:
                     continue
                 
-                pos_i = agent_i.body.position
-                pos_j = agent_j.body.position
-                distance = pos_i.get_distance(pos_j)
+                # Check if enough steps have passed since last communication
+                pair = (min(i, j), max(i, j))
+                last_step = last_comm_step.get(pair, -broadcast_interval_steps)  # Allow communication on first check
+                
+                comm_checks_total += 1
+                
+                # Bypass timing check if one agent is done (immediate notification needed)
+                timing_ok = (step_count - last_step) >= broadcast_interval_steps
+                immediate_check_needed = agent_i_done or agent_j_done  # Stable agent = immediate check
+                
+                # Communicate if timing ok OR if immediate check needed
+                if timing_ok or immediate_check_needed:
+                    comm_checks_allowed += 1
+                    pos_i = agent_i.body.position
+                    pos_j = agent_j.body.position
+                    distance = pos_i.get_distance(pos_j)
 
-                if distance < comm_range:
-                    if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
-                        # Higher-indexed agent replans
-                        replanner_idx = j
-                        replanner = agent_j
+                    if distance < comm_range:
+                        # Update last communication time for this pair
+                        last_comm_step[pair] = step_count
                         
-                        if replan_cooldowns[replanner_idx] <= 0:
-                            if verbose:
-                                print(f"  [t={current_time:.2f}s] Collision: Agent {i} vs {j} → {j} replans")
+                        if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
+                            # Determine which agent should replan and if we should force it (bypass cooldown)
+                            force_replan = False
                             
-                            # Gather all other agents' paths as obstacles
-                            obstacles = []
-                            for k, other in enumerate(agents):
-                                if k != replanner_idx and other.path:
-                                    remaining = other.get_remaining_path()
-                                    if msg_length > 0 and len(remaining) > msg_length:
-                                        remaining = remaining[:msg_length]
-                                    if remaining:
-                                        obstacles.append(remaining)
+                            # Case 1: One agent is done → active agent MUST replan (forced)
+                            if agent_i_done and not agent_j_done:
+                                replanner_idx = j
+                                replanner = agent_j
+                                force_replan = True  # Active agent must avoid stable agent
+                            elif agent_j_done and not agent_i_done:
+                                replanner_idx = i
+                                replanner = agent_i
+                                force_replan = True  # Active agent must avoid stable agent
                             
-                            if obstacles:
-                                success = replanner.replan(dynamic_obstacles=obstacles)
-                                if success:
-                                    collector.record_replan()
+                            # Case 2: Both active - check cooldowns
+                            else:
+                                agent_i_on_cooldown = replan_cooldowns[i] > 0
+                                agent_j_on_cooldown = replan_cooldowns[j] > 0
+                                
+                                # If one is on cooldown, the other MUST replan (forced)
+                                if agent_i_on_cooldown and not agent_j_on_cooldown:
+                                    replanner_idx = j
+                                    replanner = agent_j
+                                    force_replan = True  # Other agent must take responsibility
+                                elif agent_j_on_cooldown and not agent_i_on_cooldown:
+                                    replanner_idx = i
+                                    replanner = agent_i
+                                    force_replan = True  # Other agent must take responsibility
+                                else:
+                                    # Both on cooldown or both available - use convention (higher index)
+                                    replanner_idx = j
+                                    replanner = agent_j
+                                    force_replan = False  # Normal cooldown rules apply
                             
-                            replan_cooldowns[replanner_idx] = replan_cooldown_time
+                            # Check cooldown (bypass if forced)
+                            if force_replan or replan_cooldowns[replanner_idx] <= 0:
+                                if verbose:
+                                    force_msg = " [FORCED]" if force_replan else ""
+                                    print(f"  [step {step_count:4d}, t={current_time:5.2f}s] Collision predicted: Agent {i} ↔ Agent {j} (d={distance:.1f}px) → Agent {replanner_idx} replans{force_msg}")
+                                
+                                # Gather paths from agents within communication range only
+                                # Include done agents as stationary obstacles (single point at their position)
+                                replanner_pos = replanner.body.position
+                                effective_msg_length = min(msg_length, MAX_MSG_LENGTH_STEPS) if msg_length > 0 else MAX_MSG_LENGTH_STEPS
+                                obstacles = []
+                                for k, other in enumerate(agents):
+                                    if k != replanner_idx:
+                                        # Check if this agent is within communication range
+                                        other_pos = other.body.position
+                                        other_distance = replanner_pos.get_distance(other_pos)
+                                        if other_distance < comm_range:
+                                            # If agent is done, include its final position as obstacle
+                                            other_done = (other.path is None or other.path_index >= len(other.path))
+                                            if other_done:
+                                                # Done agent broadcasts its stationary position
+                                                obstacles.append([other_pos])
+                                            elif other.path:
+                                                # Active agent broadcasts its remaining path
+                                                remaining = other.get_remaining_path()
+                                                if effective_msg_length > 0 and len(remaining) > effective_msg_length:
+                                                    remaining = remaining[:effective_msg_length]
+                                                if remaining:
+                                                    obstacles.append(remaining)
+                                
+                                if obstacles:
+                                    success = replanner.replan(dynamic_obstacles=obstacles)
+                                    if success:
+                                        collector.record_replan()
+                                    # Set cooldown from config (not tied to communication frequency)
+                                    replan_cooldowns[replanner_idx] = replan_cooldown_value
+                                    # Don't set cooldown on failure - allow immediate retry
+                else:
+                    comm_checks_skipped += 1
         
         # Update agents
         for agent in agents:
@@ -235,12 +348,38 @@ def run_simulation(
             collector.update(agents[0], agents[1], current_time, AGENT_RADIUS * 2)
             
             # Also track minimum separation across ALL pairs
+            # Store CENTER-TO-CENTER distance for collision detection
+            # But convert to EDGE-TO-EDGE for safety margin reporting
             for i, j in combinations(range(n_agents), 2):
-                sep = agents[i].body.position.get_distance(agents[j].body.position)
-                if sep < collector.metrics.min_separation:
-                    collector.metrics.min_separation = sep
-                if sep < AGENT_RADIUS * 2:
-                    collector.metrics.collision_occurred = True
+                center_to_center = agents[i].body.position.get_distance(agents[j].body.position)
+                
+                # Convert to edge-to-edge clearance (actual gap between agents)
+                edge_to_edge = center_to_center - (2 * AGENT_RADIUS)
+                
+                if edge_to_edge < collector.metrics.min_separation:
+                    collector.metrics.min_separation = edge_to_edge
+                
+                # Track average separation across all pairs and timesteps
+                collector.metrics.avg_separation = (
+                    (collector.metrics.avg_separation * collector.metrics.separation_samples + edge_to_edge) /
+                    (collector.metrics.separation_samples + 1)
+                )
+                collector.metrics.separation_samples += 1
+                
+                # Collision check uses center-to-center
+                # Count collision EVENTS, not frames
+                pair = (min(i, j), max(i, j))
+                if center_to_center < AGENT_RADIUS * 2:
+                    if not collector.metrics.collision_occurred:
+                        # First collision ever
+                        collector.metrics.collision_occurred = True
+                    # Only increment if this is a NEW collision for this pair
+                    if pair not in active_collision_pairs:
+                        collector.metrics.collision_count += 1
+                        active_collision_pairs.add(pair)
+                else:
+                    # Agents separated - remove from active collisions
+                    active_collision_pairs.discard(pair)
         
         # Check if all agents done
         all_done = all(
@@ -252,12 +391,23 @@ def run_simulation(
             break
     
     timed_out = current_time >= max_time and not collector.metrics.both_reached_goal
+    
+    # Debug logging
+    if verbose and comm_enabled:
+        skip_rate = (comm_checks_skipped / comm_checks_total * 100) if comm_checks_total > 0 else 0
+        print(f"\n  Communication stats:")
+        print(f"    Interval: {broadcast_interval_steps} steps")
+        print(f"    Total checks: {comm_checks_total}")
+        print(f"    Allowed: {comm_checks_allowed} ({100-skip_rate:.1f}%)")
+        print(f"    Skipped: {comm_checks_skipped} ({skip_rate:.1f}%)")
+        print(f"    Replans: {collector.metrics.replan_count}")
+    
     return collector.finalize(timed_out=timed_out)
 
 
 def run_batch(
     comm_enabled: bool,
-    broadcast_frequency: float,
+    broadcast_interval_steps: int,
     comm_range: float,
     msg_length: int,
     n_agents: int = DEFAULT_NUM_AGENTS,
@@ -270,25 +420,36 @@ def run_batch(
     results = []
     for i in range(num_trials):
         seed = seed_start + i
+        if verbose:
+            print(f"\n  Trial {i+1}/{num_trials} (seed={seed})")
+            print(f"  {'-'*60}")
+        
         metrics = run_simulation(
             comm_enabled=comm_enabled,
-            broadcast_frequency=broadcast_frequency,
+            broadcast_interval_steps=broadcast_interval_steps,
             comm_range=comm_range,
             msg_length=msg_length,
             n_agents=n_agents,
             seed=seed,
             verbose=verbose
         )
+        
+        if verbose:
+            print(f"  Result: time={metrics.total_time:.2f}s, replans={metrics.replan_count}, "
+                  f"collisions={'Yes' if metrics.collision_occurred else 'No'}")
+        
         results.append(metrics)
     
-    # Aggregate
+    # Aggregate (filter out inf values from failed runs)
     times = [m.total_time for m in results]
     distances = [m.total_distance() for m in results]
     replans = [m.replan_count for m in results]
-    separations = [m.min_separation for m in results]
+    separations = [m.min_separation if m.min_separation != float('inf') else 0 for m in results]
+    avg_separations = [m.avg_separation if m.separation_samples > 0 else 0 for m in results]
     collisions = [1 if m.collision_occurred else 0 for m in results]
+    collision_counts = [m.collision_count for m in results]
     costs = [m.compute_cost() for m in results]
-    
+
     return {
         'time_mean': np.mean(times),
         'time_std': np.std(times),
@@ -298,7 +459,101 @@ def run_batch(
         'replan_std': np.std(replans),
         'min_separation_mean': np.mean(separations),
         'min_separation_std': np.std(separations),
+        'avg_separation_mean': np.mean(avg_separations),
+        'avg_separation_std': np.std(avg_separations),
         'collision_rate': np.mean(collisions),
+        'collision_count_mean': np.mean(collision_counts),
+        'collision_count_std': np.std(collision_counts),
+        'cost_mean': np.mean(costs),
+        'cost_std': np.std(costs),
+    }
+
+
+def run_batch_multiple_seeds(
+    comm_enabled: bool,
+    broadcast_interval_steps: int,
+    comm_range: float,
+    msg_length: int,
+    n_agents: int = DEFAULT_NUM_AGENTS,
+    num_trials: int = 10,
+    num_seeds: int = 5,
+    seed_base: int = 0,
+    verbose: bool = False
+) -> dict:
+    """
+    Run batch over multiple seeds and aggregate results across seeds.
+    
+    Args:
+        comm_enabled: Whether agents communicate
+        broadcast_interval_steps: Steps between broadcasts (smaller = more frequent)
+        comm_range: Communication range (px)
+        msg_length: Message length (waypoints)
+        n_agents: Number of agents
+        num_trials: Number of trials per seed
+        num_seeds: Number of different seeds to run
+        seed_base: Base seed value (seeds will be seed_base, seed_base+1000, seed_base+2000, ...)
+        verbose: Print status messages
+        
+    Returns:
+        Dictionary with mean and std across all seeds
+    """
+    all_results = []
+    
+    for seed_idx in range(num_seeds):
+        seed_start = seed_base + seed_idx * 1000  # Space seeds far apart
+        
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"SEED {seed_idx+1}/{num_seeds}: Base seed = {seed_start}")
+            print(f"{'='*70}")
+        
+        result = run_batch(
+            comm_enabled=comm_enabled,
+            broadcast_interval_steps=broadcast_interval_steps,
+            comm_range=comm_range,
+            msg_length=msg_length,
+            n_agents=n_agents,
+            num_trials=num_trials,
+            seed_start=seed_start,
+            verbose=verbose
+        )
+        
+        if verbose:
+            print(f"\nSeed {seed_idx+1} Summary:")
+            print(f"  Cost: {result['cost_mean']:.1f} ± {result['cost_std']:.1f}")
+            print(f"  Replans: {result['replan_mean']:.1f} ± {result['replan_std']:.1f}")
+            print(f"  Min separation: {result['min_separation_mean']:.1f} ± {result['min_separation_std']:.1f}px")
+        
+        all_results.append(result)
+    
+    if not all_results:
+        raise RuntimeError("All seeds failed initial planning")
+    
+    # Aggregate all results
+    times = [r['time'] for r in all_results]
+    distances = [r['distance'] for r in all_results]
+    replans = [r['replan_count'] for r in all_results]
+    separations = [r['min_separation'] for r in all_results]
+    avg_separations = [r['avg_separation'] for r in all_results]
+    collision_rates = [r['collision_occurred'] for r in all_results]
+    collision_counts = [r['collision_count'] for r in all_results]
+    costs = [r['cost'] for r in all_results]
+
+    return {
+        'time_mean': np.mean(times),
+        'time_std': np.std(times),
+        'distance_mean': np.mean(distances),
+        'distance_std': np.std(distances),
+        'replan_mean': np.mean(replans),
+        'replan_std': np.std(replans),
+        'min_separation_mean': np.mean(separations),
+        'min_separation_std': np.std(separations),
+        'avg_separation_mean': np.mean(avg_separations),
+        'avg_separation_std': np.std(avg_separations),
+        'collision_rate': np.mean(collision_rates),
+        'collision_rate_std': np.std(collision_rates),
+        'collision_count_mean': np.mean(collision_counts),
+        'collision_count_std': np.std(collision_counts),
         'cost_mean': np.mean(costs),
         'cost_std': np.std(costs),
     }

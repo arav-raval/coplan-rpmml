@@ -18,7 +18,10 @@ class SimulationMetrics:
     
     # Safety metrics
     min_separation: float = float('inf')
+    avg_separation: float = 0.0  # Average edge-to-edge clearance
+    separation_samples: int = 0  # Number of samples for average
     collision_occurred: bool = False
+    collision_count: int = 0  # Number of collision events (not frames)
     
     # Communication metrics
     replan_count: int = 0
@@ -136,14 +139,35 @@ class MetricsCollector:
         self._prev_pos1 = pymunk.Vec2d(pos1.x, pos1.y)
         self._prev_pos2 = pymunk.Vec2d(pos2.x, pos2.y)
         
-        # Track minimum separation
-        separation = pos1.get_distance(pos2)
-        if separation < self.metrics.min_separation:
-            self.metrics.min_separation = separation
+        # Track minimum separation (convert to edge-to-edge clearance)
+        center_to_center = pos1.get_distance(pos2)
         
-        # Check for collision
-        if separation < collision_distance:
-            self.metrics.collision_occurred = True
+        # For 2-agent case, collision_distance = 2 * AGENT_RADIUS
+        agent_radius = collision_distance / 2
+        edge_to_edge = center_to_center - collision_distance
+        
+        if edge_to_edge < self.metrics.min_separation:
+            self.metrics.min_separation = edge_to_edge
+        
+        # Track average separation (running average)
+        self.metrics.avg_separation = (
+            (self.metrics.avg_separation * self.metrics.separation_samples + edge_to_edge) /
+            (self.metrics.separation_samples + 1)
+        )
+        self.metrics.separation_samples += 1
+        
+        # Check for collision (uses center-to-center)
+        if center_to_center < collision_distance:
+            if not self.metrics.collision_occurred:
+                # First collision ever
+                self.metrics.collision_occurred = True
+            # Only count NEW collision events, not every frame of overlap
+            if not self._in_collision:
+                self.metrics.collision_count += 1
+                self._in_collision = True
+        else:
+            # Agents separated - reset collision tracking
+            self._in_collision = False
         
         # Track when each agent finishes
         if not self._agent1_done and agent1.path_index >= len(agent1.path or []):

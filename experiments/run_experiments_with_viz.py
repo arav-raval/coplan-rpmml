@@ -29,7 +29,7 @@ import numpy as np
 
 # Import configuration
 from src.config import (
-    NUM_SEEDS, NUM_SEEDS_QUICK, SIMULATION_FPS, EXPERIMENT_CONFIG, get_experiment_config_value,
+    NUM_SEEDS, SIMULATION_FPS, EXPERIMENT_CONFIG, get_experiment_config_value,
     SCREEN_WIDTH, SCREEN_HEIGHT, MAX_SPEED, AGENT_RADIUS, AGENT_COLORS,
     PREDICTION_HORIZON, PREDICTION_DT, COLLISION_DISTANCE, REPLAN_COOLDOWN_STEPS,
     MAX_MSG_LENGTH_STEPS
@@ -40,7 +40,7 @@ from src.simulation import run_batch_multiple_seeds
 
 # Import visualization
 from src.visualization.plots import (
-    plot_frequency_sweep, 
+    plot_frequency_sweep,
     plot_range_sweep, 
     plot_cost_landscape_freq_msg
 )
@@ -81,10 +81,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
     # Pymunk setup
     space = create_space()
     draw_options = pymunk.pygame_util.DrawOptions(screen)
-    
-    # Make agent colors more transparent for better path visibility
-    draw_options.flags = pymunk.pygame_util.DrawOptions.DRAW_SHAPES
-    
     static_obstacles = create_boundaries(space, SCREEN_WIDTH, SCREEN_HEIGHT)
     
     # Generate positions
@@ -111,13 +107,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
     replan_count = 0
     frame_count = 0
     
-    # Collision tracking
-    collision_count = 0
-    collision_pairs = set()  # Track unique collisions
-    
-    # Track last communication step for each agent pair (to match simulation.py)
-    last_comm_step = {}  # (i, j) -> step_number
-    
     # Main loop
     running = True
     while running:
@@ -137,111 +126,11 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             if replan_cooldowns[i] > 0:
                 replan_cooldowns[i] -= 1
         
-        # Communication-based replanning (with timing logic to match simulation.py)
+        # Communication-based replanning
         for i, j in combinations(range(len(agents)), 2):
             agent_i = agents[i]
             agent_j = agents[j]
             
-            # Check which agents are done
-            agent_i_done = (agent_i.path is None or agent_i.path_index >= len(agent_i.path))
-            agent_j_done = (agent_j.path is None or agent_j.path_index >= len(agent_j.path))
-            
-            # Skip if BOTH agents are done (no need to check this pair)
-            if agent_i_done and agent_j_done:
-                continue
-            
-            # Check if enough steps have passed since last communication
-            pair = (min(i, j), max(i, j))
-            last_step = last_comm_step.get(pair, -broadcast_interval_steps)
-            
-            # Bypass timing check if one agent is done (immediate notification needed)
-            timing_ok = (frame_count - last_step) >= broadcast_interval_steps
-            immediate_check_needed = agent_i_done or agent_j_done  # Stable agent = immediate check
-            
-            # Communicate if timing ok OR if immediate check needed
-            if timing_ok or immediate_check_needed:
-                pos_i = agent_i.body.position
-                pos_j = agent_j.body.position
-                distance = pos_i.get_distance(pos_j)
-                
-                if distance < comm_range:
-                    # Update last communication time
-                    last_comm_step[pair] = frame_count
-                    
-                    if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
-                        # Determine which agent should replan and if we should force it (bypass cooldown)
-                        force_replan = False
-                        
-                        # Case 1: One agent is done → active agent MUST replan (forced)
-                        if agent_i_done and not agent_j_done:
-                            replanner_idx = j
-                            replanner = agent_j
-                            force_replan = True  # Active agent must avoid stable agent
-                        elif agent_j_done and not agent_i_done:
-                            replanner_idx = i
-                            replanner = agent_i
-                            force_replan = True  # Active agent must avoid stable agent
-                        
-                        # Case 2: Both active - check cooldowns
-                        else:
-                            agent_i_on_cooldown = replan_cooldowns[i] > 0
-                            agent_j_on_cooldown = replan_cooldowns[j] > 0
-                            
-                            # If one is on cooldown, the other MUST replan (forced)
-                            if agent_i_on_cooldown and not agent_j_on_cooldown:
-                                replanner_idx = j
-                                replanner = agent_j
-                                force_replan = True  # Other agent must take responsibility
-                            elif agent_j_on_cooldown and not agent_i_on_cooldown:
-                                replanner_idx = i
-                                replanner = agent_i
-                                force_replan = True  # Other agent must take responsibility
-                            else:
-                                # Both on cooldown or both available - use convention (higher index)
-                                replanner_idx = j
-                                replanner = agent_j
-                                force_replan = False  # Normal cooldown rules apply
-                        
-                        # Check cooldown (bypass if forced)
-                        if force_replan or replan_cooldowns[replanner_idx] <= 0:
-                            # Gather obstacles (include done agents as stationary obstacles)
-                            replanner_pos = replanner.body.position
-                            effective_msg_length = min(msg_length, MAX_MSG_LENGTH_STEPS) if msg_length > 0 else MAX_MSG_LENGTH_STEPS
-                            obstacles = []
-                            for k, other in enumerate(agents):
-                                if k != replanner_idx:
-                                    other_pos = other.body.position
-                                    other_distance = replanner_pos.get_distance(other_pos)
-                                    if other_distance < comm_range:
-                                        # If agent is done, include its final position as obstacle
-                                        other_done = (other.path is None or other.path_index >= len(other.path))
-                                        if other_done:
-                                            # Done agent broadcasts its stationary position
-                                            obstacles.append([other_pos])
-                                        elif other.path:
-                                            # Active agent broadcasts its remaining path
-                                            remaining = other.get_remaining_path()
-                                            if effective_msg_length > 0 and len(remaining) > effective_msg_length:
-                                                remaining = remaining[:effective_msg_length]
-                                            if remaining:
-                                                obstacles.append(remaining)
-                            
-                            if obstacles:
-                                success = replanner.replan(dynamic_obstacles=obstacles)
-                                if success:
-                                    replan_count += 1
-                                    replan_cooldowns[replanner_idx] = REPLAN_COOLDOWN_STEPS
-        
-        # Update agents
-        for agent in agents:
-            agent.update()
-        
-        # Ground-truth collision detection (check all pairs)
-        for i, j in combinations(range(len(agents)), 2):
-            agent_i = agents[i]
-            agent_j = agents[j]
-            
-            # Skip if either agent is done
             if (agent_i.path is None or agent_i.path_index >= len(agent_i.path) or
                 agent_j.path is None or agent_j.path_index >= len(agent_j.path)):
                 continue
@@ -250,48 +139,40 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             pos_j = agent_j.body.position
             distance = pos_i.get_distance(pos_j)
             
-            # Check if agents are colliding (using physical agent radius)
-            if distance < 2 * AGENT_RADIUS:
-                pair = tuple(sorted([i, j]))
-                if pair not in collision_pairs:
-                    collision_pairs.add(pair)
-                    collision_count += 1
-                    print(f"  💥 COLLISION! Agents {i}-{j} at distance {distance:.1f}px")
+            if distance < comm_range:
+                if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
+                    replanner_idx = j
+                    replanner = agent_j
+                    
+                    if replan_cooldowns[replanner_idx] <= 0:
+                        # Gather obstacles
+                        replanner_pos = replanner.body.position
+                        effective_msg_length = min(msg_length, MAX_MSG_LENGTH_STEPS) if msg_length > 0 else MAX_MSG_LENGTH_STEPS
+                        obstacles = []
+                        for k, other in enumerate(agents):
+                            if k != replanner_idx and other.path:
+                                other_pos = other.body.position
+                                other_distance = replanner_pos.get_distance(other_pos)
+                                if other_distance < comm_range:
+                                    remaining = other.get_remaining_path()
+                                    if effective_msg_length > 0 and len(remaining) > effective_msg_length:
+                                        remaining = remaining[:effective_msg_length]
+                                    if remaining:
+                                        obstacles.append(remaining)
+                        
+                        if obstacles:
+                            success = replanner.replan(dynamic_obstacles=obstacles)
+                            if success:
+                                replan_count += 1
+                                replan_cooldowns[replanner_idx] = REPLAN_COOLDOWN_STEPS
+        
+        # Update agents
+        for agent in agents:
+            agent.update()
         
         # Render
         screen.fill((255, 255, 255))
         space.debug_draw(draw_options)
-        
-        # Draw paths
-        for agent in agents:
-            if agent.path:
-                # Get lighter version of agent color for full path
-                # Handle both RGB and RGBA tuples
-                color = agent.shape.color
-                if len(color) == 4:  # RGBA
-                    r, g, b, a = color
-                else:  # RGB
-                    r, g, b = color
-                
-                light_color = (min(255, r + 150), min(255, g + 150), min(255, b + 150))
-                bright_color = (r, g, b)  # Remove alpha if present
-                
-                # Draw full path in light color
-                for k in range(len(agent.path) - 1):
-                    start = agent.path[k]
-                    end = agent.path[k + 1]
-                    pygame.draw.line(screen, light_color, 
-                                   (int(start.x), int(start.y)), 
-                                   (int(end.x), int(end.y)), 1)
-                
-                # Draw remaining path in bright agent color
-                if agent.path_index < len(agent.path):
-                    for k in range(agent.path_index, len(agent.path) - 1):
-                        start = agent.path[k]
-                        end = agent.path[k + 1]
-                        pygame.draw.line(screen, bright_color, 
-                                       (int(start.x), int(start.y)), 
-                                       (int(end.x), int(end.y)), 2)
         
         # Draw goals
         for agent in agents:
@@ -301,32 +182,9 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         
         # Draw HUD
         font = pygame.font.Font(None, 24)
-        collision_status = f"💥 {collision_count}" if collision_count > 0 else "✓ 0"
-        info_lines = [
-            f"Seed: {seed} | Freq: {broadcast_interval_steps} steps",
-            f"Frame: {frame_count} | Replans: {replan_count} | Collisions: {collision_status}",
-            f"Agents: {n_agents} | Range: {comm_range:.0f}px | Msg: {msg_length}",
-            f"Press ESC to continue to next experiment"
-        ]
-        
-        for i, line in enumerate(info_lines):
-            text_surface = font.render(line, True, (0, 0, 0))
-            screen.blit(text_surface, (10, 10 + i * 25))
-        
-        # Draw agent status
-        small_font = pygame.font.Font(None, 18)
-        for i, agent in enumerate(agents):
-            status = "✓" if (agent.path is None or agent.path_index >= len(agent.path)) else "→"
-            remaining = len(agent.path) - agent.path_index if agent.path and agent.path_index < len(agent.path) else 0
-            cooldown = replan_cooldowns[i]
-            status_text = f"A{i}: {status} ({remaining} wpts, cd={cooldown})"
-            
-            # Extract RGB from color (handle RGBA)
-            color = agent.shape.color
-            text_color = (color[0], color[1], color[2]) if len(color) >= 3 else (0, 0, 0)
-            
-            text_surface = small_font.render(status_text, True, text_color)
-            screen.blit(text_surface, (SCREEN_WIDTH - 200, 10 + i * 20))
+        info_text = f"Frame: {frame_count} | Replans: {replan_count} | Press ESC to continue"
+        text_surface = font.render(info_text, True, (0, 0, 0))
+        screen.blit(text_surface, (10, 10))
         
         pygame.display.flip()
         clock.tick(SIMULATION_FPS)
@@ -337,8 +195,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             for agent in agents
         )
         if all_done:
-            collision_status = f"💥 {collision_count}" if collision_count > 0 else "✓ 0"
-            print(f"  ✓ All agents reached goals! Replans: {replan_count}, Collisions: {collision_status}")
+            print(f"  ✓ All agents reached goals! Replans: {replan_count}")
             pygame.time.wait(1000)  # Show final state for 1 second
             break
     
@@ -397,24 +254,16 @@ def run_frequency_sweep(quick=False, visualize=False):
               end="", flush=True)
         
         try:
-            # Visualize if requested (skip headless simulation for this parameter)
-            if visualize:
-                # Use SAME seed for all visualizations to see effect of frequency on same scenario
-                viz_seed = 0  # Use seed 0 consistently
-                print(f"\n  🎥 Launching visualization for {steps} steps (seed={viz_seed})...")
-                print(f"  (Using consistent seed to show frequency effect)")
-                print(f"  Press ESC when ready to continue to next parameter...")
+            # Visualize first trial if requested
+            if visualize and i == 0:
+                print(f"\n  🎥 Launching visualization for {steps} steps...")
                 visualize_single_trial(
                     broadcast_interval_steps=steps,
-            comm_range=comm_range,
-            msg_length=msg_length,
-            n_agents=n_agents,
-                    seed=viz_seed
+                    comm_range=comm_range,
+                    msg_length=msg_length,
+                    n_agents=n_agents,
+                    seed=0
                 )
-                # Skip the headless simulation for visualized parameters
-                print(f"  Visualization complete. Skipping headless simulation for this parameter.")
-                print(f"  (Use without --visualize to collect metrics)\n")
-                continue
             
             result = run_batch_multiple_seeds(
                 comm_enabled=True,
@@ -442,55 +291,36 @@ def run_frequency_sweep(quick=False, visualize=False):
     results = [r for r in results if r is not None]
     
     if not results:
-        if visualize:
-            print("\n✓ Visualization complete for all parameters!")
-            print("  Note: No metrics collected in visualization mode.")
-            print("  Run without --visualize to collect performance data.")
-            return {'visualization_only': True}
         print("\n❌ All trials failed!")
         return None
     
-    # Plot results (only if we have data)
-    if results:
-        valid_steps = [r['interval_steps'] for r in results]
-        config = {
-            'n_agents': n_agents,
-            'num_trials': num_trials,
-            'num_seeds': NUM_SEEDS,
-            'comm_range': comm_range,
-            'msg_length': msg_length
-        }
-        plot_frequency_sweep(valid_steps, results, config=config)
+    # Plot results
+    valid_steps = [r['interval_steps'] for r in results]
+    config = {
+        'n_agents': n_agents,
+        'num_trials': num_trials,
+        'num_seeds': NUM_SEEDS,
+        'comm_range': comm_range,
+        'msg_length': msg_length
+    }
+    plot_frequency_sweep(valid_steps, results, config=config)
     
-    # Find optimal (only if we have data)
-    if results:
-        costs = [r['cost_mean'] for r in results]
-        opt_idx = np.argmin(costs)
-        
-        print(f"\n✓ Optimal: {valid_steps[opt_idx]} steps ({results[opt_idx]['frequency_hz']:.2f} Hz), "
-              f"cost={costs[opt_idx]:.1f}")
+    # Find optimal
+    costs = [r['cost_mean'] for r in results]
+    opt_idx = np.argmin(costs)
+    
+    print(f"\n✓ Optimal: {valid_steps[opt_idx]} steps ({results[opt_idx]['frequency_hz']:.2f} Hz), "
+          f"cost={costs[opt_idx]:.1f}")
     
     return {
-            'optimal_interval_steps': valid_steps[opt_idx],
-            'optimal_frequency_hz': results[opt_idx]['frequency_hz'],
-            'optimal_cost': costs[opt_idx],
-            'results': results
-        }
-    
-    return None
+        'optimal_interval_steps': valid_steps[opt_idx],
+        'optimal_frequency_hz': results[opt_idx]['frequency_hz'],
+        'optimal_cost': costs[opt_idx],
+        'results': results
+    }
 
 
 # ... (rest of the file - msg_length, 2d, comparison experiments remain the same)
-
-
-# =============================================================================
-# MESSAGE LENGTH SWEEP
-# =============================================================================
-
-def run_msg_length_sweep(quick=False, visualize=False):
-    """Wrapper that calls the standalone sweep_msg_length.py module."""
-    from experiments.sweep_msg_length import run_msg_length_sweep as msg_length_sweep
-    return msg_length_sweep(quick=quick, visualize=visualize)
 
 
 # =============================================================================
@@ -502,11 +332,6 @@ EXPERIMENTS = {
         'name': 'Frequency Sweep',
         'description': 'Sweep broadcast frequency (steps per communication)',
         'function': run_frequency_sweep
-    },
-    'msg_length': {
-        'name': 'Message Length Sweep',
-        'description': 'Sweep message length (waypoints shared per communication)',
-        'function': run_msg_length_sweep
     },
 }
 
@@ -590,7 +415,6 @@ All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
                 result = exp['function'](quick=args.quick, visualize=args.visualize)
             else:
                 result = exp['function'](quick=args.quick)
-            
             elapsed = time.time() - start_time
             
             if result is not None:

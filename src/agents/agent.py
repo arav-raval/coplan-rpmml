@@ -2,7 +2,10 @@
 
 import pymunk
 import pygame
-from src.config import AGENT_RADIUS, MAX_SPEED, GOAL_THRESHOLD
+from src.config import (
+    AGENT_RADIUS, MAX_SPEED, GOAL_THRESHOLD, 
+    RRT_ITERATIONS_REPLAN, REPLAN_WAIT_STEPS
+)
 from src.planning import RRTPlanner
 
 
@@ -35,7 +38,7 @@ class Agent:
         self.path_index = 0
         self.static_obstacles = static_obstacles
         self.world_bounds = world_bounds
-        self.planner = RRTPlanner(start_pos, goal_pos, static_obstacles, world_bounds)
+        self.planner = RRTPlanner(start_pos, goal_pos, static_obstacles, world_bounds, max_iterations=None)
 
     def plan_path(self):
         """Run initial path planning."""
@@ -47,32 +50,63 @@ class Agent:
         else:
             print(f"  FAILED to find path.")
 
-    def replan(self, dynamic_obstacles=None):
+    def replan(self, dynamic_obstacles=None, max_retries=3):
         """Replan from current position, optionally avoiding other paths.
+        
+        Uses more RRT iterations when replanning (especially with dynamic obstacles)
+        and retries with increasing iterations if initial attempt fails.
         
         Args:
             dynamic_obstacles: List of paths to avoid (from other agents).
+            max_retries: Maximum number of retry attempts with more iterations.
             
         Returns:
             True if replanning succeeded, False otherwise.
         """
         current_pos = self.body.position
-        new_planner = RRTPlanner(
-            current_pos, self.goal,
-            self.static_obstacles, self.world_bounds
-        )
-        if dynamic_obstacles:
-            new_planner.set_dynamic_obstacles(dynamic_obstacles)
+        
+        # Try with increasing iterations (more iterations for harder cases)
+        for attempt in range(max_retries + 1):
+            iterations = RRT_ITERATIONS_REPLAN * (attempt + 1)  # 1000, 2000, 3000, ...
+            
+            new_planner = RRTPlanner(
+                current_pos, self.goal,
+                self.static_obstacles, self.world_bounds,
+                max_iterations=iterations
+            )
+            if dynamic_obstacles:
+                new_planner.set_dynamic_obstacles(dynamic_obstacles)
 
-        new_path = new_planner.plan()
-        if new_path:
-            self.path = new_path
-            self.path_index = 0
-            self.planner = new_planner
-            print(f"Agent ({self.shape.color}) replanned: {len(self.path)} waypoints.")
-            return True
+            new_path = new_planner.plan()
+            if new_path:
+                self.path = new_path
+                self.path_index = 0
+                self.planner = new_planner
+                agent_id = getattr(self, 'id', '?')
+                if attempt > 0:
+                    print(f"  Agent {agent_id} replanned on attempt {attempt+1} ({iterations} iters): {len(self.path)} waypoints")
+                else:
+                    print(f"  Agent {agent_id} replanned: {len(self.path)} waypoints")
+                return True
+        
+        agent_id = getattr(self, 'id', '?')
+        print(f"  ⚠️  Agent {agent_id} replan FAILED after {max_retries+1} attempts")
+        
+        # Fallback: insert current position as "wait" waypoints
+        if self.path and self.path_index < len(self.path):
+            current_pos = self.body.position
+            # Insert current position multiple times to create a waiting period
+            wait_waypoints = [current_pos] * REPLAN_WAIT_STEPS
+            
+            # Insert wait waypoints at current position in path
+            self.path = (self.path[:self.path_index] + 
+                        wait_waypoints + 
+                        self.path[self.path_index:])
+            
+            print(f"  🛑 Agent {agent_id} WAITING (inserted {len(wait_waypoints)} wait waypoints)")
+            return True  # Waiting counts as successful collision avoidance
         else:
-            print(f"Agent ({self.shape.color}) replan FAILED, keeping old path.")
+            print(f"  ⚠️  Agent {agent_id} has no path to insert wait - keeping old path")
             return False
 
     def update(self):

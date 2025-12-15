@@ -1,6 +1,6 @@
 import math
 
-class PurePursuit:
+class Controller:
     def __init__(self, lookahead=25.0, v_des=100.0, k_w=3.0, stop_dist=25.0):
         self.look = lookahead
         self.v_des = v_des

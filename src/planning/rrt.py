@@ -13,13 +13,14 @@ class RRTPlanner:
             self.pos = pymunk.Vec2d(*pos)
             self.parent = None
 
-    def __init__(self, start_pos, goal_pos, static_obstacles, bounds):
+    def __init__(self, start_pos, goal_pos, static_obstacles, bounds, max_iterations=None):
         """
         Args:
             start_pos: Starting position (x, y)
             goal_pos: Goal position (x, y)
             static_obstacles: List of pymunk shapes to avoid (walls)
             bounds: (width, height) of the world
+            max_iterations: Maximum RRT iterations (defaults to RRT_ITERATIONS)
         """
         self.start_node = self.Node(start_pos)
         self.goal_node = self.Node(goal_pos)
@@ -27,6 +28,7 @@ class RRTPlanner:
         self.static_obstacles = static_obstacles
         self.bounds = bounds
         self.dynamic_obstacles = []  # Paths from other agents
+        self.max_iterations = max_iterations if max_iterations is not None else RRT_ITERATIONS
 
     def set_dynamic_obstacles(self, paths):
         """Set list of paths to avoid (for communication mode).
@@ -42,7 +44,7 @@ class RRTPlanner:
         Returns:
             List of pymunk.Vec2d waypoints, or None if no path found.
         """
-        for _ in range(RRT_ITERATIONS):
+        for _ in range(self.max_iterations):
             # Sample random point (with goal bias)
             if random.random() < RRT_GOAL_BIAS:
                 rand_pos = self.goal_node.pos
