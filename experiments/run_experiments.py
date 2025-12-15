@@ -372,7 +372,7 @@ def run_frequency_sweep(quick=False, visualize=False):
     comm_range = EXPERIMENT_CONFIG['comm_range']
     msg_length = EXPERIMENT_CONFIG['msg_length']
     n_agents = EXPERIMENT_CONFIG['n_agents']
-    num_trials = get_experiment_config_value('num_trials', quick)
+    num_seeds = NUM_SEEDS_QUICK if quick else NUM_SEEDS
     
     # Generate sweep values (step intervals)
     step_intervals = np.linspace(min_steps, max_steps, num_values).astype(int)
@@ -382,8 +382,7 @@ def run_frequency_sweep(quick=False, visualize=False):
     print(f"  Agents: {n_agents}")
     print(f"  Comm range: {comm_range:.1f}px")
     print(f"  Message length: {msg_length} waypoints")
-    print(f"  Trials per point: {num_trials}")
-    print(f"  Seeds: {NUM_SEEDS}")
+    print(f"  Seeds per point: {num_seeds}")
     print(f"\nFrequency range:")
     print(f"  Steps: {step_intervals[0]} to {step_intervals[-1]} steps")
     print(f"  Hz: {frequencies_hz[0]:.2f} to {frequencies_hz[-1]:.2f} Hz")
@@ -422,8 +421,7 @@ def run_frequency_sweep(quick=False, visualize=False):
                 comm_range=comm_range,
                 msg_length=msg_length,
                 n_agents=n_agents,
-                num_trials=num_trials,
-                num_seeds=NUM_SEEDS,
+                num_seeds=num_seeds,
                 verbose=True  # Enable verbose logging
             )
             
@@ -455,8 +453,7 @@ def run_frequency_sweep(quick=False, visualize=False):
         valid_steps = [r['interval_steps'] for r in results]
         config = {
             'n_agents': n_agents,
-            'num_trials': num_trials,
-            'num_seeds': NUM_SEEDS,
+            'num_seeds': num_seeds,
             'comm_range': comm_range,
             'msg_length': msg_length
         }
@@ -494,6 +491,30 @@ def run_msg_length_sweep(quick=False, visualize=False):
 
 
 # =============================================================================
+# 2D SWEEP
+# =============================================================================
+
+def run_2d_sweep(quick=False, visualize=False):
+    """Wrapper that calls the standalone sweep_2d.py module."""
+    from experiments.sweep_2d import main as sweep_2d_main
+    import sys
+    
+    # Set up args for sweep_2d
+    original_argv = sys.argv
+    if quick:
+        sys.argv = ['sweep_2d.py', '--quick']
+    else:
+        sys.argv = ['sweep_2d.py']
+    
+    try:
+        result = sweep_2d_main()
+        # Return a dummy result to indicate success
+        return {'status': 'completed'}
+    finally:
+        sys.argv = original_argv
+
+
+# =============================================================================
 # EXPERIMENT REGISTRY
 # =============================================================================
 
@@ -507,6 +528,11 @@ EXPERIMENTS = {
         'name': 'Message Length Sweep',
         'description': 'Sweep message length (waypoints shared per communication)',
         'function': run_msg_length_sweep
+    },
+    '2d': {
+        'name': '2D Cost Landscape',
+        'description': 'Sweep frequency × message length to find optimal combination',
+        'function': run_2d_sweep
     },
 }
 

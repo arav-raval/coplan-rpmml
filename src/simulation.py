@@ -475,13 +475,14 @@ def run_batch_multiple_seeds(
     comm_range: float,
     msg_length: int,
     n_agents: int = DEFAULT_NUM_AGENTS,
-    num_trials: int = 10,
-    num_seeds: int = 5,
-    seed_base: int = 0,
+    num_seeds: int = 125,
     verbose: bool = False
 ) -> dict:
     """
-    Run batch over multiple seeds and aggregate results across seeds.
+    Run batch experiments across multiple seeds.
+    
+    Runs num_seeds independent simulations with consecutive seeds (0, 1, 2, ..., num_seeds-1).
+    Each seed produces one simulation result.
     
     Args:
         comm_enabled: Whether agents communicate
@@ -489,55 +490,48 @@ def run_batch_multiple_seeds(
         comm_range: Communication range (px)
         msg_length: Message length (waypoints)
         n_agents: Number of agents
-        num_trials: Number of trials per seed
-        num_seeds: Number of different seeds to run
-        seed_base: Base seed value (seeds will be seed_base, seed_base+1000, seed_base+2000, ...)
-        verbose: Print status messages
+        num_seeds: Total number of independent samples
+        verbose: Print progress messages
         
     Returns:
-        Dictionary with mean and std across all seeds
+        dict: Aggregated statistics across all seeds (mean and std)
     """
     all_results = []
     
-    for seed_idx in range(num_seeds):
-        seed_start = seed_base + seed_idx * 1000  # Space seeds far apart
-        
-        if verbose:
-            print(f"\n{'='*70}")
-            print(f"SEED {seed_idx+1}/{num_seeds}: Base seed = {seed_start}")
-            print(f"{'='*70}")
-        
-        result = run_batch(
+    for seed in range(num_seeds):
+        result = run_simulation(
             comm_enabled=comm_enabled,
             broadcast_interval_steps=broadcast_interval_steps,
             comm_range=comm_range,
             msg_length=msg_length,
             n_agents=n_agents,
-            num_trials=num_trials,
-            seed_start=seed_start,
-            verbose=verbose
+            seed=seed,
+            verbose=False
         )
         
-        if verbose:
-            print(f"\nSeed {seed_idx+1} Summary:")
-            print(f"  Cost: {result['cost_mean']:.1f} ± {result['cost_std']:.1f}")
-            print(f"  Replans: {result['replan_mean']:.1f} ± {result['replan_std']:.1f}")
-            print(f"  Min separation: {result['min_separation_mean']:.1f} ± {result['min_separation_std']:.1f}px")
+        if result is None:
+            # Planning failed, skip this seed
+            if verbose:
+                print(f"  Seed {seed}: Initial planning failed, skipping...")
+            continue
         
         all_results.append(result)
+        
+        if verbose and (seed + 1) % 10 == 0:
+            print(f"  Completed {seed + 1}/{num_seeds} seeds...")
     
     if not all_results:
         raise RuntimeError("All seeds failed initial planning")
     
-    # Aggregate all results
-    times = [r['time'] for r in all_results]
-    distances = [r['distance'] for r in all_results]
-    replans = [r['replan_count'] for r in all_results]
-    separations = [r['min_separation'] for r in all_results]
-    avg_separations = [r['avg_separation'] for r in all_results]
-    collision_rates = [r['collision_occurred'] for r in all_results]
-    collision_counts = [r['collision_count'] for r in all_results]
-    costs = [r['cost'] for r in all_results]
+    # Aggregate all results (result is SimulationMetrics object)
+    times = [r.total_time for r in all_results]
+    distances = [r.total_distance() for r in all_results]
+    replans = [r.replan_count for r in all_results]
+    separations = [r.min_separation for r in all_results]
+    avg_separations = [r.avg_separation for r in all_results]
+    collision_rates = [1 if r.collision_occurred else 0 for r in all_results]
+    collision_counts = [r.collision_count for r in all_results]
+    costs = [r.compute_cost() for r in all_results]
 
     return {
         'time_mean': np.mean(times),

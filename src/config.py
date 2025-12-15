@@ -4,8 +4,8 @@
 # CORE SIMULATION PARAMETERS
 # ============================================================================
 # --- Simulation Settings ---
-NUM_SEEDS = 3  # Total number of independent samples (previously: 5 batches × 25 trials)
-NUM_SEEDS_QUICK = 25  # Fewer seeds for quick testing
+NUM_SEEDS = 15 # Total number of independent samples (previously: 5 batches × 25 trials)
+NUM_SEEDS_QUICK = 5  # Fewer seeds for quick testing
 SIMULATION_FPS = 60
 
 # --- Environment ---
@@ -45,6 +45,37 @@ REPLAN_COOLDOWN_STEPS = 5  # Steps to wait after replanning (prevents thrashing)
 REPLAN_WAIT_STEPS = 3  # Steps to wait when replanning fails (collision avoidance fallback)
 MAX_MSG_LENGTH_STEPS = PREDICTION_HORIZON_STEPS
 
+# COST FUNCTION WEIGHTS AND PARAMETERS
+# Refined cost structure for meaningful trade-offs between communication and safety
+
+# Safety threshold for risk calculation
+# Defined relative to agent geometry: minimum desired edge-to-edge clearance
+# Notes:
+#   - COLLISION_DISTANCE = AGENT_RADIUS * 2.0 = 30px (center-to-center touching)
+#   - edge_to_edge_clearance = center_to_center_distance - COLLISION_DISTANCE
+#   - When edge_to_edge = 0, agents are touching (collision)
+#   - SAFETY_THRESHOLD is the minimum desired clearance for "safe" operation
+#   - Using 2/3 of agent radius as safety buffer (reasonable margin)
+SAFETY_THRESHOLD = AGENT_RADIUS   # ~10px with AGENT_RADIUS=15
+
+WEIGHTS = {
+    # Core performance
+    'time': 1.0,              # Penalize simulation time (steps)
+    'distance': 0.0,          # Drop distance (redundant with time)
+    
+    # Communication costs (actual usage)
+    'frequency': 0.75,        # Base readiness: w_freq * broadcast_frequency_hz (small overhead)
+    'message': 1.0,           # Actual data sent: w_msg * (messages_sent * msg_length)
+    'replan': 0.75,           # Cost per replan event (optional, can be absorbed by message cost)
+    
+    # Safety shaping (pre-collision)
+    'risk': 200.0,            # Penalize close calls: w_risk * (gap/threshold)^2
+    
+    # Failure penalties
+    'collision': 3000.0,      # Large penalty per collision event
+    'timeout': 1000.0,        # Penalty if agents didn't reach goal (medium severity)
+}
+
 # ============================================================================
 # EXPERIMENT CONFIGURATION
 # ============================================================================
@@ -61,30 +92,24 @@ EXPERIMENT_CONFIG = {
     # Frequency sweep settings
     'frequency_sweep_min_steps': 1,
     'frequency_sweep_max_steps': 60,
-    'frequency_sweep_num_values': 25,
+    'frequency_sweep_num_values': 20,
     'frequency_sweep_num_values_quick': 8,
     
     # Message length sweep settings
     'msg_length_sweep_min': 1,
     'msg_length_sweep_max': 25,
-    'msg_length_sweep_num_values': 5,
+    'msg_length_sweep_num_values': 10,
     'msg_length_sweep_num_values_quick': 5,
     
     # 2D landscape settings (frequency × message length)
     'landscape_freq_min_steps': 1,
-    'landscape_freq_max_steps': 20,
-    'landscape_freq_num_values': 15,
+    'landscape_freq_max_steps': 60,
+    'landscape_freq_num_values': 20,
     'landscape_freq_num_values_quick': 5,
-    'landscape_msg_length_min': 5,
+    'landscape_msg_length_min': 1,
     'landscape_msg_length_max': 25,
     'landscape_msg_length_num_values': 10,
-    'landscape_msg_length_num_values_quick': 6,
-    'landscape_num_trials': 5,
-    'landscape_num_trials_quick': 3,
-    
-    # Comparison experiment settings
-    'comparison_num_trials': 10,
-    'comparison_num_trials_quick': 5,
+    'landscape_msg_length_num_values_quick': 5,
 }
 
 

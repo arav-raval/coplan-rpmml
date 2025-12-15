@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 import pymunk
-
+from src.config import WEIGHTS
 
 @dataclass
 class SimulationMetrics:
@@ -41,69 +41,87 @@ class SimulationMetrics:
 
     def compute_cost(self, weights: dict = None) -> float:
         """
-        Compute weighted cost function.
+        Compute refined weighted cost for meaningful trade-offs.
         
-        The goal is to MINIMIZE communication while ensuring safety.
-        Higher frequencies and ranges should have higher costs.
+        New structure emphasizes actual communication usage vs safety:
+        - Time: simulation steps taken (direct performance metric)
+        - Distance: dropped (redundant with time) or tiny weight
+        - Frequency overhead: base cost for maintaining high comm frequency (Hz)
+        - Message usage: actual data transmitted (messages_sent * msg_length)
+        - Replan cost: per-replan event overhead
+        - Risk shaping: squared penalty for close approaches < safety threshold
+        - Collision: large penalty per collision event
+        - Timeout: penalty if agents didn't complete
         """
         if weights is None:
-            weights = {
-                # Performance (want to minimize)
-                'time': 1.0,
-                'distance': 0.01,
-                
-                # Communication overhead (want to minimize)
-                'frequency': 5.0,        # Penalize high broadcast frequency
-                'range': 0.02,           # Penalize long communication range  
-                'bandwidth': 0.1,        # Penalize total data transmitted
-                
-                # Safety (want to avoid)
-                'risk': 50.0,            # Penalize close calls
-                'collision': 1000.0,     # Huge penalty for collision
-            }
+            from src.config import WEIGHTS, SAFETY_THRESHOLD
+            weights = WEIGHTS
+            safety_thresh = SAFETY_THRESHOLD
+        else:
+            safety_thresh = weights.get('safety_threshold', 10.0)
         
-        # Risk = inverse of safety margin (closer = higher risk)
-        risk_score = 1.0 / max(self.min_separation, 1.0)
+        # 1. Time cost (steps)
+        time_cost = weights['time'] * self.total_time
         
-        # Bandwidth = replans × message_length (total waypoints transmitted)
-        bandwidth_used = self.replan_count * self.msg_length
+        # 2. Distance cost (tiny or zero - mostly redundant with time)
+        distance_cost = weights.get('distance', 0.0) * self.total_distance()
         
-        cost = (
-            # Performance cost
-            weights['time'] * self.total_time +
-            weights['distance'] * self.total_distance() +
-            
-            # Communication cost (THIS IS NEW!)
-            weights['frequency'] * self.broadcast_frequency +
-            weights['range'] * self.comm_range +
-            weights['bandwidth'] * bandwidth_used +
-            
-            # Safety cost
-            weights['risk'] * risk_score +
-            weights['collision'] * (1.0 if self.collision_occurred else 0.0)
+        # 3. Frequency overhead (base readiness cost for high Hz)
+        frequency_cost = weights['frequency'] * self.broadcast_frequency
+        
+        # 4. Message usage (actual data sent: messages_sent * msg_length)
+        message_cost = weights['message'] * (self.messages_sent * self.msg_length)
+        
+        # 5. Replan cost (optional overhead per replan event)
+        replan_cost = weights.get('replan', 0.0) * self.replan_count
+        
+        # 6. Risk cost (safety shaping: penalize close approaches)
+        # gap = how much closer than safe threshold
+        # risk = (gap/threshold)^2 gives quadratic penalty for close calls
+        gap = max(0, safety_thresh - self.min_separation)
+        risk_score = (gap / safety_thresh) ** 2 if safety_thresh > 0 else 0
+        risk_cost = weights['risk'] * risk_score
+        
+        # 7. Collision cost (large penalty per collision event)
+        collision_cost = weights['collision'] * self.collision_count
+        
+        # 8. Timeout cost (penalty if didn't reach goal)
+        timeout_cost = weights.get('timeout', 0.0) * (0 if self.both_reached_goal else 1)
+        
+        total_cost = (
+            time_cost + 
+            distance_cost + 
+            frequency_cost + 
+            message_cost + 
+            replan_cost + 
+            risk_cost + 
+            collision_cost + 
+            timeout_cost
         )
-        return cost
+        
+        return total_cost
     
     def compute_cost_breakdown(self, weights: dict = None) -> dict:
-        """Return individual cost components for analysis."""
+        """Return individual cost components for detailed analysis."""
         if weights is None:
-            weights = {
-                'time': 1.0, 'distance': 0.01,
-                'frequency': 5.0, 'range': 0.02, 'bandwidth': 0.1,
-                'risk': 50.0, 'collision': 1000.0,
-            }
+            from src.config import WEIGHTS, SAFETY_THRESHOLD
+            weights = WEIGHTS
+            safety_thresh = SAFETY_THRESHOLD
+        else:
+            safety_thresh = weights.get('safety_threshold', 10.0)
         
-        risk_score = 1.0 / max(self.min_separation, 1.0)
-        bandwidth_used = self.replan_count * self.msg_length
+        gap = max(0, safety_thresh - self.min_separation)
+        risk_score = (gap / safety_thresh) ** 2 if safety_thresh > 0 else 0
         
         return {
-            'time_cost': weights['time'] * self.total_time,
-            'distance_cost': weights['distance'] * self.total_distance(),
-            'frequency_cost': weights['frequency'] * self.broadcast_frequency,
-            'range_cost': weights['range'] * self.comm_range,
-            'bandwidth_cost': weights['bandwidth'] * bandwidth_used,
-            'risk_cost': weights['risk'] * risk_score,
-            'collision_cost': weights['collision'] * (1.0 if self.collision_occurred else 0.0),
+            'time': weights['time'] * self.total_time,
+            'distance': weights.get('distance', 0.0) * self.total_distance(),
+            'frequency': weights['frequency'] * self.broadcast_frequency,
+            'message': weights['message'] * (self.messages_sent * self.msg_length),
+            'replan': weights.get('replan', 0.0) * self.replan_count,
+            'risk': weights['risk'] * risk_score,
+            'collision': weights['collision'] * self.collision_count,
+            'timeout': weights.get('timeout', 0.0) * (0 if self.both_reached_goal else 1),
             'total': self.compute_cost(weights)
         }
 
@@ -190,6 +208,10 @@ class MetricsCollector:
     def record_replan(self):
         """Call when a replanning event occurs."""
         self.metrics.replan_count += 1
+        self.metrics.messages_sent += 1  # Each replan involves sending path data
+    
+    def record_message(self):
+        """Call when a message is transmitted (without replan)."""
         self.metrics.messages_sent += 1
     
     def finalize(self, timed_out: bool = False):
