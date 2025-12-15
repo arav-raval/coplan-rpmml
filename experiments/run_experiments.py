@@ -515,6 +515,15 @@ def run_2d_sweep(quick=False, visualize=False):
 
 
 # =============================================================================
+# COMPARISON EXPERIMENT
+# =============================================================================
+def run_comparison_sweep(quick=False, visualize=False):
+    """Wrapper that calls the standalone sweep_comparison.py module."""
+    from experiments.sweep_comparison import run_comparison_sweep as comparison_sweep
+    return comparison_sweep(quick=quick, visualize=visualize)
+
+
+# =============================================================================
 # EXPERIMENT REGISTRY
 # =============================================================================
 
@@ -533,6 +542,11 @@ EXPERIMENTS = {
         'name': '2D Cost Landscape',
         'description': 'Sweep frequency × message length to find optimal combination',
         'function': run_2d_sweep
+    },
+    'comparison': {
+        'name': 'Communication Comparison',
+        'description': 'Compare optimal policy vs no communication baseline',
+        'function': run_comparison_sweep
     },
 }
 

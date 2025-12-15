@@ -624,6 +624,160 @@ def plot_2d_sweep_details(freq_steps, msg_lengths, results_matrix,
     print(f"Saved: {save_path}")
 
 
+def plot_comparison(result_no_comm, result_with_comm, save_path="results/comparison.png", config=None):
+    """
+    Plot comparison between communication ON vs OFF.
+    
+    Args:
+        result_no_comm: Results dictionary from no-communication baseline
+        result_with_comm: Results dictionary from optimal communication policy
+        save_path: Where to save the plot
+        config: Optional config dict with experiment parameters
+    """
+    ensure_results_dir()
+    
+    if config is None:
+        config = {}
+    
+    # Build config text
+    config_parts = []
+    if 'n_agents' in config: config_parts.append(f"Agents: {config['n_agents']}")
+    if 'num_seeds' in config: config_parts.append(f"Seeds: {config['num_seeds']}")
+    if 'opt_freq_steps' in config:
+        from src.config import SIMULATION_FPS
+        opt_hz = SIMULATION_FPS / config['opt_freq_steps']
+        config_parts.append(f"Optimal: {config['opt_freq_steps']} steps ({opt_hz:.1f}Hz), {config['opt_msg_length']}wp")
+    config_text = " | ".join(config_parts) if config_parts else ""
+    
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    
+    fig.suptitle("Communication ON vs OFF Comparison", fontsize=14, fontweight='bold', y=0.98)
+    if config_text:
+        fig.text(0.5, 0.94, config_text, ha='center', fontsize=10,
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
+    
+    scenarios = ['No Communication\n(Baseline)', 'Optimal Policy\n(Communication ON)']
+    colors = ['#D32F2F', '#388E3C']  # Red for baseline, green for optimal
+    
+    # Extract data
+    costs = [result_no_comm['cost_mean'], result_with_comm['cost_mean']]
+    cost_stds = [result_no_comm['cost_std'], result_with_comm['cost_std']]
+    
+    times = [result_no_comm['time_mean'], result_with_comm['time_mean']]
+    time_stds = [result_no_comm['time_std'], result_with_comm['time_std']]
+    
+    replans = [result_no_comm['replan_mean'], result_with_comm['replan_mean']]
+    replan_stds = [result_no_comm['replan_std'], result_with_comm['replan_std']]
+    
+    separations = [result_no_comm['avg_separation_mean'], result_with_comm['avg_separation_mean']]
+    separation_stds = [result_no_comm['avg_separation_std'], result_with_comm['avg_separation_std']]
+    
+    collision_counts = [result_no_comm['collision_count_mean'], result_with_comm['collision_count_mean']]
+    collision_count_stds = [result_no_comm['collision_count_std'], result_with_comm['collision_count_std']]
+    
+    collision_rates = [result_no_comm['collision_rate'] * 100, result_with_comm['collision_rate'] * 100]
+    
+    x = np.arange(2)
+    width = 0.6
+    
+    # Plot 1: Total Cost
+    ax1 = axes[0, 0]
+    bars1 = ax1.bar(x, costs, width, yerr=cost_stds, capsize=5, color=colors, alpha=0.8)
+    ax1.set_ylabel('Total Cost', fontsize=11, fontweight='bold')
+    ax1.set_title('Total Cost (lower = better)')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(scenarios)
+    ax1.grid(True, alpha=0.3, axis='y')
+    # Add value labels
+    for i, (bar, val, std) in enumerate(zip(bars1, costs, cost_stds)):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + std,
+                f'{val:.0f}±{std:.0f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 2: Simulation Time
+    ax2 = axes[0, 1]
+    bars2 = ax2.bar(x, times, width, yerr=time_stds, capsize=5, color=colors, alpha=0.8)
+    ax2.set_ylabel('Time (steps)', fontsize=11, fontweight='bold')
+    ax2.set_title('Simulation Time')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(scenarios)
+    ax2.grid(True, alpha=0.3, axis='y')
+    for i, (bar, val, std) in enumerate(zip(bars2, times, time_stds)):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height + std,
+                f'{val:.0f}±{std:.0f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 3: Replanning Events
+    ax3 = axes[0, 2]
+    bars3 = ax3.bar(x, replans, width, yerr=replan_stds, capsize=5, color=colors, alpha=0.8)
+    ax3.set_ylabel('Replan Count', fontsize=11, fontweight='bold')
+    ax3.set_title('Replanning Events')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(scenarios)
+    ax3.grid(True, alpha=0.3, axis='y')
+    for i, (bar, val, std) in enumerate(zip(bars3, replans, replan_stds)):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height + std,
+                f'{val:.1f}±{std:.1f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 4: Average Separation
+    ax4 = axes[1, 0]
+    bars4 = ax4.bar(x, separations, width, yerr=separation_stds, capsize=5, color=colors, alpha=0.8)
+    ax4.set_ylabel('Separation (px)', fontsize=11, fontweight='bold')
+    ax4.set_title('Average Agent Separation (higher = safer)')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(scenarios)
+    ax4.grid(True, alpha=0.3, axis='y')
+    ax4.axhline(y=15, color='orange', linestyle='--', linewidth=1, alpha=0.7, label='Safety threshold')
+    ax4.legend()
+    for i, (bar, val, std) in enumerate(zip(bars4, separations, separation_stds)):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + std,
+                f'{val:.1f}±{std:.1f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 5: Collision Count
+    ax5 = axes[1, 1]
+    bars5 = ax5.bar(x, collision_counts, width, yerr=collision_count_stds, capsize=5, color=colors, alpha=0.8)
+    ax5.set_ylabel('Collision Count', fontsize=11, fontweight='bold')
+    ax5.set_title('Collision Events (lower = safer)')
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(scenarios)
+    ax5.grid(True, alpha=0.3, axis='y')
+    for i, (bar, val, std) in enumerate(zip(bars5, collision_counts, collision_count_stds)):
+        height = bar.get_height()
+        ax5.text(bar.get_x() + bar.get_width()/2., height + std,
+                f'{val:.2f}±{std:.2f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 6: Collision Rate
+    ax6 = axes[1, 2]
+    bars6 = ax6.bar(x, collision_rates, width, color=colors, alpha=0.8)
+    ax6.set_ylabel('Collision Rate (%)', fontsize=11, fontweight='bold')
+    ax6.set_title('Collision Rate (% runs with ≥1 collision)')
+    ax6.set_xticks(x)
+    ax6.set_xticklabels(scenarios)
+    ax6.grid(True, alpha=0.3, axis='y')
+    ax6.set_ylim(0, min(100, max(collision_rates) * 1.2))
+    for i, (bar, val) in enumerate(zip(bars6, collision_rates)):
+        height = bar.get_height()
+        ax6.text(bar.get_x() + bar.get_width()/2., height,
+                f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    # Summary text at bottom
+    cost_improvement = (costs[0] - costs[1]) / costs[0] * 100
+    collision_reduction = (collision_counts[0] - collision_counts[1]) / max(collision_counts[0], 0.01) * 100
+    
+    summary_text = (f"★ Communication provides: {cost_improvement:.1f}% cost reduction, "
+                   f"{collision_reduction:.1f}% fewer collisions, "
+                   f"{separations[1]:.1f}px avg separation (vs {separations[0]:.1f}px)")
+    fig.text(0.5, 0.02, summary_text, ha='center', fontsize=10, style='italic',
+             bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.9))
+    
+    plt.tight_layout(rect=[0, 0.05, 1, 0.92])
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {save_path}")
+
+
 def identify_plateaus(values, costs, threshold=0.05):
     """Find regions where cost gradient is near zero."""
     if len(values) < 3:

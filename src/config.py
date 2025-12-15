@@ -79,6 +79,15 @@ WEIGHTS = {
 # ============================================================================
 # EXPERIMENT CONFIGURATION
 # ============================================================================
+
+# Optimal communication policy (from 2D sweep results)
+# These can be updated based on experimental findings
+OPTIMAL_COMM_POLICY = {
+    'frequency_steps': 15,      # Steps per communication (12 Hz at 60 FPS)
+    'msg_length': 9,          # Waypoints shared per message
+    'description': 'Balanced policy: moderate frequency, medium message length'
+}
+
 EXPERIMENT_CONFIG = {
     # Core experiment settings
     'n_agents': DEFAULT_NUM_AGENTS,
@@ -110,6 +119,10 @@ EXPERIMENT_CONFIG = {
     'landscape_msg_length_max': 25,
     'landscape_msg_length_num_values': 10,
     'landscape_msg_length_num_values_quick': 5,
+    
+    # Comparison experiment settings
+    'comparison_num_seeds': NUM_SEEDS,         # Number of seeds for comparison
+    'comparison_num_seeds_quick': NUM_SEEDS_QUICK,
 }
 
 
