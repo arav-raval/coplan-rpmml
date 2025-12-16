@@ -123,7 +123,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         if all_done:
             running = False
         
-        # Check collisions (for counting)
+        # Check collisions
         for i, j in combinations(range(len(agents)), 2):
             pos_i = agents[i].body.position
             pos_j = agents[j].body.position
@@ -161,6 +161,8 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                 
                 if distance < comm_range:
                     last_comm_step[pair] = frame_count
+                    
+                    collector.record_message()
                     
                     if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
                         force_replan = False
@@ -223,17 +225,15 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         # Draw paths
         for agent in agents:
             if agent.path:
-                # Get lighter version of agent color for full path
                 color = agent.shape.color
-                if len(color) == 4:  # RGBA
+                if len(color) == 4:  
                     r, g, b, a = color
-                else:  # RGB
+                else:  
                     r, g, b = color
                 
                 light_color = (min(255, r + 150), min(255, g + 150), min(255, b + 150))
                 bright_color = (r, g, b)
                 
-                # Draw full path in light color
                 for k in range(len(agent.path) - 1):
                     start = agent.path[k]
                     end = agent.path[k + 1]
@@ -241,7 +241,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                                    (int(start.x), int(start.y)), 
                                    (int(end.x), int(end.y)), 1)
                 
-                # Draw remaining path in bright agent color
                 if agent.path_index < len(agent.path):
                     for k in range(agent.path_index, len(agent.path) - 1):
                         start = agent.path[k]
@@ -250,13 +249,11 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                                        (int(start.x), int(start.y)), 
                                        (int(end.x), int(end.y)), 2)
         
-        # Draw goals
         for agent in agents:
             pygame.draw.circle(screen, (0, 200, 0), 
                              (int(agent.goal.x), int(agent.goal.y)), 
                              AGENT_RADIUS // 2, 2)
         
-        # HUD
         font = pygame.font.Font(None, 24)
         collision_status = f"💥 {collision_count}" if collision_count > 0 else "✓ 0"
         info_lines = [
@@ -271,7 +268,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             text_surface = font.render(line, True, (0, 0, 0))
             screen.blit(text_surface, (10, 10 + i * 25))
         
-        # Draw agent status
         small_font = pygame.font.Font(None, 18)
         for i, agent in enumerate(agents):
             status = "✓" if (agent.path is None or agent.path_index >= len(agent.path)) else "→"
@@ -309,10 +305,8 @@ def run_msg_length_sweep(quick=False, visualize=False):
     n_agents = EXPERIMENT_CONFIG['n_agents']
     comm_range = EXPERIMENT_CONFIG['comm_range']
     
-    # Use fixed optimal frequency from frequency sweep (or default)
-    broadcast_interval_steps = 12  # High frequency for testing msg length effect
+    broadcast_interval_steps = 12  
     
-    # Message length sweep range
     if quick:
         min_length = EXPERIMENT_CONFIG['msg_length_sweep_min']
         max_length = EXPERIMENT_CONFIG['msg_length_sweep_max']
@@ -324,13 +318,12 @@ def run_msg_length_sweep(quick=False, visualize=False):
         num_values = EXPERIMENT_CONFIG['msg_length_sweep_num_values']
         num_seeds = NUM_SEEDS
     
-    # Generate message length values
     if min_length == 0:
         msg_lengths = [0] + list(np.linspace(5, max_length, num_values - 1, dtype=int))
     else:
         msg_lengths = np.linspace(min_length, max_length, num_values, dtype=int)
     
-    msg_lengths = sorted(set(msg_lengths))  # Remove duplicates and sort
+    msg_lengths = sorted(set(msg_lengths))  
     
     print(f"\nConfiguration:")
     print(f"  Agents: {n_agents}")
@@ -351,10 +344,9 @@ def run_msg_length_sweep(quick=False, visualize=False):
             print(" (unlimited)", end="")
         print(" ... ", flush=True)
         
-        # Visualization mode
         if visualize:
             viz_seed = 0
-            print(f"\n  🎥 Launching visualization (seed={viz_seed})...")
+            print(f"\n  Launching visualization (seed={viz_seed})...")
             print(f"  Press ESC when ready to continue to next parameter...")
             visualize_single_trial(
                 broadcast_interval_steps=broadcast_interval_steps,
@@ -384,7 +376,7 @@ def run_msg_length_sweep(quick=False, visualize=False):
         valid_lengths.append(msg_len)
     
     if not results:
-        print("\n⚠️  No results collected (visualization mode only)")
+        print("\n  No results collected (visualization mode only)")
         return None
     
     elapsed = time.time() - start_time
@@ -410,11 +402,11 @@ def run_msg_length_sweep(quick=False, visualize=False):
         }
     )
     
-    print(f"✓ Saved to results/msg_length_sweep.png")
-    print(f"✓ Completed in {elapsed:.1f}s")
+    print(f" Saved to results/msg_length_sweep.png")
+    print(f" Completed in {elapsed:.1f}s")
     
     if not quick:
-        print(f"\n★ Optimal: {valid_lengths[opt_idx]} waypoints, cost={costs[opt_idx]:.1f}")
+        print(f"\n Optimal: {valid_lengths[opt_idx]} waypoints, cost={costs[opt_idx]:.1f}")
     
     return {
         'optimal_msg_length': valid_lengths[opt_idx],

@@ -1,4 +1,3 @@
-# main.py
 """Entry point for the multi-agent simulation."""
 
 import pygame
@@ -59,10 +58,10 @@ def generate_random_positions(n_agents, width, height, margin=None, seed=None):
                 break
             attempts += 1
         
-        # Generate goal position (prefer opposite side of screen)
+        # Generate goal position 
         attempts = 0
         while attempts < 100:
-            # Bias goal to opposite side
+            # Bias goal 
             if start[0] < width // 2:
                 goal_x = random.randint(width // 2, width - margin)
             else:
@@ -73,7 +72,7 @@ def generate_random_positions(n_agents, width, height, margin=None, seed=None):
                 goal_y = random.randint(margin, height // 2)
             goal = (goal_x, goal_y)
             
-            # Ensure goal is far enough from start
+            # Ensure goal is far enough 
             dist = ((goal[0] - start[0])**2 + (goal[1] - start[1])**2)**0.5
             if dist > MIN_TRAVEL_DISTANCE:
                 break
@@ -96,13 +95,13 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
     sim_pos2 = pymunk.Vec2d(*agent2.body.position)
     sim_idx2 = agent2.path_index
 
-    # Check initial distance (agents might already be very close)
+    # Check initial distance 
     if sim_pos1.get_distance(sim_pos2) < COLLISION_DISTANCE:
         return True
 
     t = 0.0
     while t < horizon_seconds:
-        # Simulate agent1 movement
+        # Simulate agent1 
         if sim_idx1 < len(agent1.path):
             target1 = agent1.path[sim_idx1]
             vec1 = target1 - sim_pos1
@@ -114,7 +113,7 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
                 else:
                     sim_pos1 += vec1.normalized() * move
 
-        # Simulate agent2 movement
+        # Simulate agent2 
         if sim_idx2 < len(agent2.path):
             target2 = agent2.path[sim_idx2]
             vec2 = target2 - sim_pos2
@@ -126,12 +125,12 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
                 else:
                     sim_pos2 += vec2.normalized() * move
 
-        # Check for collision (must happen AFTER movement simulation)
+        # Check for collision 
         distance = sim_pos1.get_distance(sim_pos2)
         if distance < COLLISION_DISTANCE:
             return True
 
-        # Early exit: if both agents have finished their paths, no collision possible
+        # Early exit: if both agents have finished their paths, no collision 
         if sim_idx1 >= len(agent1.path) and sim_idx2 >= len(agent2.path):
             return False
 
@@ -142,7 +141,7 @@ def predict_collision_pair(agent1, agent2, horizon_seconds):
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-agent RRT simulation")
-    # All defaults read from EXPERIMENT_CONFIG in config.py (single source of truth)
+    # All defaults read from EXPERIMENT_CONFIG in config.py 
     parser.add_argument('--comm', action='store_true', help='Enable communication')
     parser.add_argument('--no-comm', dest='comm', action='store_false', help='Disable communication')
     parser.add_argument('--seed', type=int, default=5, help='Random seed')
@@ -180,14 +179,13 @@ def main():
         color = AGENT_COLORS[i % len(AGENT_COLORS)]
         agent = Agent(space, start, goal, static_obstacles,
                       (SCREEN_WIDTH, SCREEN_HEIGHT), color)
-        agent.id = i  # Add ID for tracking
+        agent.id = i  
         agents.append(agent)
 
-    # Convert frequency from Hz to steps
     broadcast_interval_steps = int(SIMULATION_FPS / args.frequency) if args.frequency > 0 else float('inf')
     
-    # Initial planning
-    print(f"\n=== {args.agents} Agents | Mode: {'COMMUNICATION' if args.comm else 'NO COMM'} | Seed: {args.seed} ===")
+    # Initial planning ---
+    print(f"\n{args.agents} Agents | Mode: {'COMMUNICATION' if args.comm else 'NO COMM'} | Seed: {args.seed}")
     if args.comm:
         print(f"Comm params: freq={args.frequency:.2f}Hz ({broadcast_interval_steps} steps), range={args.range:.0f}px, msg_len={args.msg_length}\n")
     else:
@@ -202,10 +200,10 @@ def main():
     
     # Collision tracking
     collision_count = 0
-    collision_pairs = set()  # Track unique collisions
+    collision_pairs = set()  
     
     # Track last communication step for each agent pair
-    last_comm_step = {}  # (i, j) -> step_number
+    last_comm_step = {}  
     
     # Debug counters
     frame_count = 0
@@ -221,14 +219,13 @@ def main():
         dt = 1.0 / SIMULATION_FPS
         space.step(dt)
 
-        # Update cooldowns (decrement by 1 step)
+        # Update cooldowns 
         for i in replan_cooldowns:
             if replan_cooldowns[i] > 0:
                 replan_cooldowns[i] -= 1
 
-        # Communication-based replanning (check ALL pairs)
+        # Communication-based replanning 
         if args.comm:
-            # Debug: track how many pairs are in range and how many predict collisions
             pairs_in_range = 0
             pairs_predicting_collision = 0
             pairs_blocked_by_cooldown = 0
@@ -241,17 +238,17 @@ def main():
                 agent_i_done = (agent_i.path is None or agent_i.path_index >= len(agent_i.path))
                 agent_j_done = (agent_j.path is None or agent_j.path_index >= len(agent_j.path))
                 
-                # Skip if BOTH agents are done (no need to check this pair)
+                # Skip if both agents are done 
                 if agent_i_done and agent_j_done:
                     continue
                 
-                # Check if enough steps have passed since last communication
+                # Check if enough steps have passed since last communication 
                 pair = (min(i, j), max(i, j))
-                last_step = last_comm_step.get(pair, -broadcast_interval_steps)  # Allow communication on first check
+                last_step = last_comm_step.get(pair, -broadcast_interval_steps)  
                 
-                # Bypass timing check if one agent is done (immediate notification needed)
+                # Bypass timing check if one agent is done 
                 timing_ok = (frame_count - last_step) >= broadcast_interval_steps
-                immediate_check_needed = agent_i_done or agent_j_done  # Stable agent = immediate check
+                immediate_check_needed = agent_i_done or agent_j_done  
                 
                 # Communicate if timing ok OR if immediate check needed
                 if timing_ok or immediate_check_needed:
@@ -259,16 +256,16 @@ def main():
                     pos_j = agent_j.body.position
                     distance = pos_i.get_distance(pos_j)
 
-                    # Check if within communication range (using parameter, not hardcoded)
+                    # Check if within communication range 
                     if distance < args.range:
-                        # Update last communication time for this pair
+                        # Update last communication time 
                         last_comm_step[pair] = frame_count
                         
                         pairs_in_range += 1
                         # Check if collision predicted
                         collision_predicted = predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON)
-                        # Debug: log when agents are close but no collision predicted
-                        if not collision_predicted and distance < args.range * 0.5 and frame_count % 180 == 0:  # Every 3 seconds, if within half range
+                        
+                        if not collision_predicted and distance < args.range * 0.5 and frame_count % 180 == 0:  
                             print(f"  [Debug] Agents {i}-{j}: dist={distance:.1f}px (range={args.range:.0f}px), "
                                   f"collision_threshold={COLLISION_DISTANCE:.1f}px, "
                                   f"path_idx={agent_i.path_index}/{len(agent_i.path) if agent_i.path else 0}, "
@@ -276,46 +273,46 @@ def main():
                                   f"NO collision predicted")
                         if collision_predicted:
                             pairs_predicting_collision += 1
-                            # Determine which agent should replan and if we should force it (bypass cooldown)
+                            # Determine which agent should replan and if we should force it 
                             force_replan = False
                             
-                            # Case 1: One agent is done → active agent MUST replan (forced)
+                            
                             if agent_i_done and not agent_j_done:
                                 replanner_idx = j
                                 replanner = agent_j
-                                force_replan = True  # Active agent must avoid stable agent
+                                force_replan = True  
                             elif agent_j_done and not agent_i_done:
                                 replanner_idx = i
                                 replanner = agent_i
-                                force_replan = True  # Active agent must avoid stable agent
+                                force_replan = True  
                             
-                            # Case 2: Both active - check cooldowns
+                            
                             else:
                                 agent_i_on_cooldown = replan_cooldowns[i] > 0
                                 agent_j_on_cooldown = replan_cooldowns[j] > 0
                                 
-                                # If one is on cooldown, the other MUST replan (forced)
+                                
                                 if agent_i_on_cooldown and not agent_j_on_cooldown:
                                     replanner_idx = j
                                     replanner = agent_j
-                                    force_replan = True  # Other agent must take responsibility
+                                    force_replan = True  
                                 elif agent_j_on_cooldown and not agent_i_on_cooldown:
                                     replanner_idx = i
                                     replanner = agent_i
-                                    force_replan = True  # Other agent must take responsibility
+                                    force_replan = True  
                                 else:
-                                    # Both on cooldown or both available - use convention (higher index)
+                                    # Both on cooldown or both available - use convention 
                                     replanner_idx = j
                                     replanner = agent_j
-                                    force_replan = False  # Normal cooldown rules apply
+                                    force_replan = False  
                             
-                            # Check cooldown (bypass if forced)
+                            # Check cooldown 
                             if force_replan or replan_cooldowns[replanner_idx] <= 0:
                                 force_msg = " [FORCED]" if force_replan else ""
                                 print(f"[Collision predicted] Agent {i} vs {j} ({distance:.0f}px) → Agent {replanner_idx} replans{force_msg}")
                             
                             # Gather paths from agents within communication range only
-                            # Include done agents as stationary obstacles (single point at their position)
+                            # Include done agents as stationary obstacles 
                             replanner_pos = replanner.body.position
                             effective_msg_length = min(args.msg_length, MAX_MSG_LENGTH_STEPS) if args.msg_length > 0 else MAX_MSG_LENGTH_STEPS
                             obstacles = []
@@ -326,14 +323,14 @@ def main():
                                     other_pos = other.body.position
                                     other_distance = replanner_pos.get_distance(other_pos)
                                     if other_distance < args.range:
-                                        # If agent is done, include its final position as obstacle
+                                        # If agent is done, include its final position 
                                         other_done = (other.path is None or other.path_index >= len(other.path))
                                         if other_done:
-                                            # Done agent broadcasts its stationary position
+                                            
                                             obstacles.append([other_pos])
                                             total_obstacle_points += 1
                                         elif other.path:
-                                            # Active agent broadcasts its remaining path
+                                            
                                             remaining = other.get_remaining_path()
                                             if effective_msg_length > 0 and len(remaining) > effective_msg_length:
                                                 remaining = remaining[:effective_msg_length]
@@ -346,18 +343,18 @@ def main():
                                 success = replanner.replan(dynamic_obstacles=obstacles)
                                 if success:
                                     replan_count += 1
-                                    # Set cooldown from config (not tied to communication frequency)
+                                    # Set cooldown from config 
                                     replan_cooldowns[replanner_idx] = REPLAN_COOLDOWN_STEPS
                                 else:
                                     print(f"  [WARNING] Replanning failed for Agent {j} - will retry next frame")
-                                    # Don't set cooldown on failure - allow immediate retry
+                                    
                             else:
                                 print(f"  [WARNING] No obstacles to avoid for Agent {j}")
-                                # Don't set cooldown if no obstacles (shouldn't happen, but be safe)
+                                
                         else:
                             pairs_blocked_by_cooldown += 1
             
-            # Debug output every 60 frames (1 second)
+            # Debug output every 60 frames 
             frame_count += 1
             if frame_count - last_debug_output >= 60:
                 if pairs_in_range > 0:
@@ -370,7 +367,7 @@ def main():
         for agent in agents:
             agent.update()
 
-        # Check for actual collisions (physical crashes) - GROUND TRUTH
+        # Check for actual collisions 
         for i, j in combinations(range(len(agents)), 2):
             agent_i = agents[i]
             agent_j = agents[j]
@@ -385,14 +382,14 @@ def main():
             pos_j = agent_j.body.position
             distance = pos_i.get_distance(pos_j)
             
-            # Collision = agents overlap (distance < sum of radii)
-            collision_threshold = AGENT_RADIUS * 2  # 30px = physical overlap
+            # Collision = agents overlap 
+            collision_threshold = AGENT_RADIUS * 2 
             if distance < collision_threshold:
                 pair_key = tuple(sorted([i, j]))
                 if pair_key not in collision_pairs:
                     collision_pairs.add(pair_key)
                     collision_count += 1
-                    print(f"💥 COLLISION! Agents {i}-{j} at distance {distance:.1f}px (frame {frame_count})")
+                    print(f"COLLISION! Agents {i}-{j} at distance {distance:.1f}px (frame {frame_count})")
 
         # Drawing
         screen.fill((255, 255, 255))

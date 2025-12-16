@@ -1,22 +1,19 @@
 """
-Multi-Agent Path Planning Experiments with Communication
-
-This script runs parameter sweep experiments to evaluate how communication
-affects multi-agent path planning performance. All configuration parameters
-are centralized in src/config.py.
-
-Available Experiments:
-    frequency  - Sweep broadcast frequency (steps per communication)
-    msg_length - Sweep message length (waypoints shared)
-    2d         - 2D cost landscape (frequency × message length)
-    comparison - Compare communication ON vs OFF
+Multi-Agent Path Planning Experiments (With / Without Communication)
+This test runs parameter sweep experiments (across broadcast freqeuency and message length)
+to evaluate how communication affects multi-agent path planning performance.
+All configuration parameters are centralized in src/config.py.
 
 Usage:
     python experiments/run_experiments.py                   # Run all experiments
     python experiments/run_experiments.py frequency         # Run specific experiment
-    python experiments/run_experiments.py --quick           # Quick mode (fewer trials)
+    python experiments/run_experiments.py --quick           # Quick mode
     python experiments/run_experiments.py --visualize       # Show visualization
     python experiments/run_experiments.py --list            # List experiments
+
+Archive: 
+    This test previously included a sweep over agents, but we simplified our testing to a 
+    fixed 4-agent configuration. 
 """
 
 import sys
@@ -26,41 +23,34 @@ import argparse
 import time
 from datetime import datetime
 import numpy as np
+import pygame
+import pymunk
+import pymunk.pygame_util
+from itertools import combinations
 
-# Import configuration
 from src.config import (
     NUM_SEEDS, NUM_SEEDS_QUICK, SIMULATION_FPS, EXPERIMENT_CONFIG, get_experiment_config_value,
     SCREEN_WIDTH, SCREEN_HEIGHT, MAX_SPEED, AGENT_RADIUS, AGENT_COLORS,
     PREDICTION_HORIZON, PREDICTION_DT, COLLISION_DISTANCE, REPLAN_COOLDOWN_STEPS,
     MAX_MSG_LENGTH_STEPS
 )
-
-# Import simulation engine
 from src.simulation import run_batch_multiple_seeds
-
-# Import visualization
 from src.visualization.plots import (
     plot_frequency_sweep, 
     plot_range_sweep, 
     plot_cost_landscape_freq_msg
 )
-
-# Import for visualization
-import pygame
-import pymunk
-import pymunk.pygame_util
-from itertools import combinations
 from src.world import create_space, create_boundaries
 from src.agents import Agent
 
 
 # =============================================================================
-# VISUALIZATION HELPER
+# UTILITY FUNCTIONS
 # =============================================================================
 
 def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_agents, seed=0):
     """
-    Run a single trial with pygame visualization (like main.py).
+    Run a single trial with pygame visualization
     
     Args:
         broadcast_interval_steps: Steps between broadcasts
@@ -82,7 +72,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
     space = create_space()
     draw_options = pymunk.pygame_util.DrawOptions(screen)
     
-    # Make agent colors more transparent for better path visibility
     draw_options.flags = pymunk.pygame_util.DrawOptions.DRAW_SHAPES
     
     static_obstacles = create_boundaries(space, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -113,10 +102,10 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
     
     # Collision tracking
     collision_count = 0
-    collision_pairs = set()  # Track unique collisions
+    collision_pairs = set() 
     
-    # Track last communication step for each agent pair (to match simulation.py)
-    last_comm_step = {}  # (i, j) -> step_number
+    # Track last communication step for each agent pair
+    last_comm_step = {} 
     
     # Main loop
     running = True
@@ -137,7 +126,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             if replan_cooldowns[i] > 0:
                 replan_cooldowns[i] -= 1
         
-        # Communication-based replanning (with timing logic to match simulation.py)
+        # Communication-based replanning
         for i, j in combinations(range(len(agents)), 2):
             agent_i = agents[i]
             agent_j = agents[j]
@@ -146,19 +135,19 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             agent_i_done = (agent_i.path is None or agent_i.path_index >= len(agent_i.path))
             agent_j_done = (agent_j.path is None or agent_j.path_index >= len(agent_j.path))
             
-            # Skip if BOTH agents are done (no need to check this pair)
+            # Skip if both agents are done
             if agent_i_done and agent_j_done:
                 continue
             
-            # Check if enough steps have passed since last communication
+            # Check if enough steps have passed since last communication for this pair
             pair = (min(i, j), max(i, j))
             last_step = last_comm_step.get(pair, -broadcast_interval_steps)
             
-            # Bypass timing check if one agent is done (immediate notification needed)
+            # Bypass timing check if one agent is done 
             timing_ok = (frame_count - last_step) >= broadcast_interval_steps
-            immediate_check_needed = agent_i_done or agent_j_done  # Stable agent = immediate check
+            immediate_check_needed = agent_i_done or agent_j_done 
             
-            # Communicate if timing ok OR if immediate check needed
+            # Communicate if timing ok or immediate check needed
             if timing_ok or immediate_check_needed:
                 pos_i = agent_i.body.position
                 pos_j = agent_j.body.position
@@ -168,43 +157,46 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                     # Update last communication time
                     last_comm_step[pair] = frame_count
                     
+                    # Count this broadcast as a message
+                    collector.record_message()
+                    
                     if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
-                        # Determine which agent should replan and if we should force it (bypass cooldown)
+                        # Determine which agent should replan and if we should force it
                         force_replan = False
                         
-                        # Case 1: One agent is done → active agent MUST replan (forced)
+                        # One agent is done
                         if agent_i_done and not agent_j_done:
                             replanner_idx = j
                             replanner = agent_j
-                            force_replan = True  # Active agent must avoid stable agent
+                            force_replan = True  
                         elif agent_j_done and not agent_i_done:
                             replanner_idx = i
                             replanner = agent_i
-                            force_replan = True  # Active agent must avoid stable agent
+                            force_replan = True  
                         
-                        # Case 2: Both active - check cooldowns
+                        # Both active - check cooldowns
                         else:
                             agent_i_on_cooldown = replan_cooldowns[i] > 0
                             agent_j_on_cooldown = replan_cooldowns[j] > 0
                             
-                            # If one is on cooldown, the other MUST replan (forced)
+                            # If one is on cooldown, the other must replan
                             if agent_i_on_cooldown and not agent_j_on_cooldown:
                                 replanner_idx = j
                                 replanner = agent_j
-                                force_replan = True  # Other agent must take responsibility
+                                force_replan = True  
                             elif agent_j_on_cooldown and not agent_i_on_cooldown:
                                 replanner_idx = i
                                 replanner = agent_i
-                                force_replan = True  # Other agent must take responsibility
+                                force_replan = True 
                             else:
-                                # Both on cooldown or both available - use convention (higher index)
+                                # Both on cooldown or both available
                                 replanner_idx = j
                                 replanner = agent_j
-                                force_replan = False  # Normal cooldown rules apply
+                                force_replan = False  
                         
                         # Check cooldown (bypass if forced)
                         if force_replan or replan_cooldowns[replanner_idx] <= 0:
-                            # Gather obstacles (include done agents as stationary obstacles)
+                            # Gather obstacles 
                             replanner_pos = replanner.body.position
                             effective_msg_length = min(msg_length, MAX_MSG_LENGTH_STEPS) if msg_length > 0 else MAX_MSG_LENGTH_STEPS
                             obstacles = []
@@ -213,13 +205,11 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                                     other_pos = other.body.position
                                     other_distance = replanner_pos.get_distance(other_pos)
                                     if other_distance < comm_range:
-                                        # If agent is done, include its final position as obstacle
+                                        # If agent is done, include its final position
                                         other_done = (other.path is None or other.path_index >= len(other.path))
                                         if other_done:
-                                            # Done agent broadcasts its stationary position
                                             obstacles.append([other_pos])
                                         elif other.path:
-                                            # Active agent broadcasts its remaining path
                                             remaining = other.get_remaining_path()
                                             if effective_msg_length > 0 and len(remaining) > effective_msg_length:
                                                 remaining = remaining[:effective_msg_length]
@@ -236,12 +226,12 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         for agent in agents:
             agent.update()
         
-        # Ground-truth collision detection (check all pairs)
+        # Ground-truth collision detection 
         for i, j in combinations(range(len(agents)), 2):
             agent_i = agents[i]
             agent_j = agents[j]
             
-            # Skip if either agent is done
+            # Skip if both agents are done
             if (agent_i.path is None or agent_i.path_index >= len(agent_i.path) or
                 agent_j.path is None or agent_j.path_index >= len(agent_j.path)):
                 continue
@@ -250,7 +240,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             pos_j = agent_j.body.position
             distance = pos_i.get_distance(pos_j)
             
-            # Check if agents are colliding (using physical agent radius)
+            # Check if agents are colliding
             if distance < 2 * AGENT_RADIUS:
                 pair = tuple(sorted([i, j]))
                 if pair not in collision_pairs:
@@ -265,18 +255,15 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         # Draw paths
         for agent in agents:
             if agent.path:
-                # Get lighter version of agent color for full path
-                # Handle both RGB and RGBA tuples
                 color = agent.shape.color
-                if len(color) == 4:  # RGBA
+                if len(color) == 4:  
                     r, g, b, a = color
-                else:  # RGB
+                else:  
                     r, g, b = color
                 
                 light_color = (min(255, r + 150), min(255, g + 150), min(255, b + 150))
-                bright_color = (r, g, b)  # Remove alpha if present
+                bright_color = (r, g, b)  
                 
-                # Draw full path in light color
                 for k in range(len(agent.path) - 1):
                     start = agent.path[k]
                     end = agent.path[k + 1]
@@ -284,7 +271,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                                    (int(start.x), int(start.y)), 
                                    (int(end.x), int(end.y)), 1)
                 
-                # Draw remaining path in bright agent color
                 if agent.path_index < len(agent.path):
                     for k in range(agent.path_index, len(agent.path) - 1):
                         start = agent.path[k]
@@ -299,7 +285,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
                              (int(agent.goal.x), int(agent.goal.y)), 
                              AGENT_RADIUS // 2, 2)
         
-        # Draw HUD
+        # Draw info
         font = pygame.font.Font(None, 24)
         collision_status = f"💥 {collision_count}" if collision_count > 0 else "✓ 0"
         info_lines = [
@@ -313,7 +299,7 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             text_surface = font.render(line, True, (0, 0, 0))
             screen.blit(text_surface, (10, 10 + i * 25))
         
-        # Draw agent status
+        # Draw agent info
         small_font = pygame.font.Font(None, 18)
         for i, agent in enumerate(agents):
             status = "✓" if (agent.path is None or agent.path_index >= len(agent.path)) else "→"
@@ -321,7 +307,6 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
             cooldown = replan_cooldowns[i]
             status_text = f"A{i}: {status} ({remaining} wpts, cd={cooldown})"
             
-            # Extract RGB from color (handle RGBA)
             color = agent.shape.color
             text_color = (color[0], color[1], color[2]) if len(color) >= 3 else (0, 0, 0)
             
@@ -338,8 +323,8 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
         )
         if all_done:
             collision_status = f"💥 {collision_count}" if collision_count > 0 else "✓ 0"
-            print(f"  ✓ All agents reached goals! Replans: {replan_count}, Collisions: {collision_status}")
-            pygame.time.wait(1000)  # Show final state for 1 second
+            print(f"All agents reached goals! Replans: {replan_count}, Collisions: {collision_status}")
+            pygame.time.wait(1000) 
             break
     
     pygame.quit()
@@ -347,15 +332,15 @@ def visualize_single_trial(broadcast_interval_steps, comm_range, msg_length, n_a
 
 
 # =============================================================================
-# EXPERIMENT IMPLEMENTATIONS
+# EXPERIMENTS
 # =============================================================================
 
 def run_frequency_sweep(quick=False, visualize=False):
     """
-    Sweep over broadcast frequency (defined as steps per communication).
+    Sweep over broadcast frequency (defined as steps per communication)
     
-    Fixed parameters: comm_range, msg_length, n_agents (from config)
-    Sweep parameter: broadcast_interval_steps (min to max from config)
+    Fixed parameters: comm_range, msg_length, n_agents 
+    Sweep parameter: broadcast_interval_steps
     
     Args:
         quick: Use fewer trials/points
@@ -374,9 +359,9 @@ def run_frequency_sweep(quick=False, visualize=False):
     n_agents = EXPERIMENT_CONFIG['n_agents']
     num_seeds = NUM_SEEDS_QUICK if quick else NUM_SEEDS
     
-    # Generate sweep values (step intervals)
+    # Generate sweep values
     step_intervals = np.linspace(min_steps, max_steps, num_values).astype(int)
-    frequencies_hz = SIMULATION_FPS / step_intervals  # Convert to Hz for display
+    frequencies_hz = SIMULATION_FPS / step_intervals  
     
     print(f"\nConfiguration:")
     print(f"  Agents: {n_agents}")
@@ -396,13 +381,11 @@ def run_frequency_sweep(quick=False, visualize=False):
               end="", flush=True)
         
         try:
-            # Visualize if requested (skip headless simulation for this parameter)
+            # Visualize if requested
             if visualize:
-                # Use SAME seed for all visualizations to see effect of frequency on same scenario
-                viz_seed = 0  # Use seed 0 consistently
-                print(f"\n  🎥 Launching visualization for {steps} steps (seed={viz_seed})...")
-                print(f"  (Using consistent seed to show frequency effect)")
-                print(f"  Press ESC when ready to continue to next parameter...")
+                viz_seed = 0  
+                print(f"\nLaunching visualization for {steps} steps (seed={viz_seed})...")
+                print(f"Press ESC when ready to continue to next parameter...")
                 visualize_single_trial(
                     broadcast_interval_steps=steps,
             comm_range=comm_range,
@@ -410,9 +393,8 @@ def run_frequency_sweep(quick=False, visualize=False):
             n_agents=n_agents,
                     seed=viz_seed
                 )
-                # Skip the headless simulation for visualized parameters
-                print(f"  Visualization complete. Skipping headless simulation for this parameter.")
-                print(f"  (Use without --visualize to collect metrics)\n")
+                print(f"Visualization complete. Skipping headless simulation for this parameter.")
+                print(f"Use without --visualize to collect metrics\n")
                 continue
             
             result = run_batch_multiple_seeds(
@@ -422,7 +404,7 @@ def run_frequency_sweep(quick=False, visualize=False):
                 msg_length=msg_length,
                 n_agents=n_agents,
                 num_seeds=num_seeds,
-                verbose=True  # Enable verbose logging
+                verbose=True  
             )
             
             print(f"cost={result['cost_mean']:6.1f}±{result['cost_std']:4.1f}, "
@@ -436,7 +418,6 @@ def run_frequency_sweep(quick=False, visualize=False):
             print(f"FAILED: {e}")
             results.append(None)
     
-    # Filter out failed runs
     results = [r for r in results if r is not None]
     
     if not results:
@@ -448,7 +429,7 @@ def run_frequency_sweep(quick=False, visualize=False):
         print("\n❌ All trials failed!")
         return None
     
-    # Plot results (only if we have data)
+    # Plot results
     if results:
         valid_steps = [r['interval_steps'] for r in results]
         config = {
@@ -459,7 +440,7 @@ def run_frequency_sweep(quick=False, visualize=False):
         }
         plot_frequency_sweep(valid_steps, results, config=config)
     
-    # Find optimal (only if we have data)
+    # Find optimal
     if results:
         costs = [r['cost_mean'] for r in results]
         opt_idx = np.argmin(costs)
@@ -476,16 +457,17 @@ def run_frequency_sweep(quick=False, visualize=False):
     
     return None
 
-
-# ... (rest of the file - msg_length, 2d, comparison experiments remain the same)
-
-
 # =============================================================================
 # MESSAGE LENGTH SWEEP
 # =============================================================================
 
 def run_msg_length_sweep(quick=False, visualize=False):
-    """Wrapper that calls the standalone sweep_msg_length.py module."""
+    """
+    Sweep over message length (number of waypoints shared per communication)
+    
+    Fixed parameters: comm_range, broadcast_interval_steps, n_agents 
+    Sweep parameter: msg_length
+    """
     from experiments.sweep_msg_length import run_msg_length_sweep as msg_length_sweep
     return msg_length_sweep(quick=quick, visualize=visualize)
 
@@ -495,11 +477,15 @@ def run_msg_length_sweep(quick=False, visualize=False):
 # =============================================================================
 
 def run_2d_sweep(quick=False, visualize=False):
-    """Wrapper that calls the standalone sweep_2d.py module."""
+    """
+    Sweep over frequency and message length simultaneously
+    
+    Fixed parameters: comm_range, n_agents 
+    Sweep parameters: broadcast_interval_steps, msg_length
+    """
     from experiments.sweep_2d import main as sweep_2d_main
     import sys
     
-    # Set up args for sweep_2d
     original_argv = sys.argv
     if quick:
         sys.argv = ['sweep_2d.py', '--quick']
@@ -508,7 +494,6 @@ def run_2d_sweep(quick=False, visualize=False):
     
     try:
         result = sweep_2d_main()
-        # Return a dummy result to indicate success
         return {'status': 'completed'}
     finally:
         sys.argv = original_argv
@@ -526,7 +511,6 @@ def run_comparison_sweep(quick=False, visualize=False):
 # =============================================================================
 # EXPERIMENT REGISTRY
 # =============================================================================
-
 EXPERIMENTS = {
     'frequency': {
         'name': 'Frequency Sweep',
@@ -567,7 +551,7 @@ Examples:
   %(prog)s --quick              # Quick mode (fewer trials)
   %(prog)s --list               # List available experiments
 
-All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
+All configuration parameters are defined in src/config.py.
         """
     )
     
@@ -612,7 +596,7 @@ All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
     print("=" * 70)
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Mode: {'QUICK' if args.quick else 'FULL'}")
-    print(f"Visualize: {'YES (first trial)' if args.visualize else 'NO'}")
+    print(f"Visualize: {'YES' if args.visualize else 'NO'}")
     print(f"Experiments: {', '.join(to_run)}")
     print("=" * 70)
     
@@ -625,7 +609,6 @@ All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
         start_time = time.time()
         
         try:
-            # Pass visualize flag to experiment functions that support it
             if 'visualize' in exp['function'].__code__.co_varnames:
                 result = exp['function'](quick=args.quick, visualize=args.visualize)
             else:
@@ -635,15 +618,15 @@ All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
             
             if result is not None:
                 results[exp_name] = {'status': 'success', 'result': result, 'time': elapsed}
-                print(f"\n✓ {exp['name']} completed in {elapsed:.1f}s")
+                print(f"\n{exp['name']} completed in {elapsed:.1f}s")
             else:
                 results[exp_name] = {'status': 'failed', 'time': elapsed}
-                print(f"\n❌ {exp['name']} failed after {elapsed:.1f}s")
+                print(f"\n{exp['name']} failed after {elapsed:.1f}s")
                 
         except Exception as e:
             elapsed = time.time() - start_time
             results[exp_name] = {'status': 'error', 'error': str(e), 'time': elapsed}
-            print(f"\n❌ {exp['name']} error after {elapsed:.1f}s: {e}")
+            print(f"\n{exp['name']} error after {elapsed:.1f}s: {e}")
     
     # Summary
     total_elapsed = time.time() - total_start
@@ -658,20 +641,20 @@ All configuration parameters are defined in src/config.py (EXPERIMENT_CONFIG).
     
     for exp_name, res in results.items():
         exp = EXPERIMENTS[exp_name]
-        status_icon = "✓" if res['status'] == 'success' else "❌"
+        status_icon = "YES" if res['status'] == 'success' else "NO"
         print(f"{status_icon} {exp['name']:<25} ({res['time']:.1f}s)")
         
         if res['status'] == 'success' and 'result' in res:
             r = res['result']
             if 'optimal_frequency_hz' in r:
-                print(f"   → Optimal: {r['optimal_interval_steps']} steps "
+                print(f"   Optimal: {r['optimal_interval_steps']} steps "
                       f"({r['optimal_frequency_hz']:.2f} Hz)")
             if 'optimal_msg_length' in r:
-                print(f"   → Optimal: {r['optimal_msg_length']} waypoints")
+                print(f"   Optimal: {r['optimal_msg_length']} waypoints")
             if 'cost_reduction_pct' in r:
-                print(f"   → Communication reduces cost by {r['cost_reduction_pct']:.1f}%")
+                print(f"   Communication reduces cost by {r['cost_reduction_pct']:.1f}%")
         elif res['status'] == 'error':
-            print(f"   → Error: {res['error']}")
+            print(f"   Error: {res['error']}")
     
     print(f"\nResults saved to: results/")
     print("=" * 70 + "\n")

@@ -1,4 +1,3 @@
-# src/visualization/plots.py
 """Plotting utilities for experiment results."""
 
 import matplotlib.pyplot as plt
@@ -27,7 +26,6 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     if config is None:
         config = {}
     
-    # Build config text for subtitle
     config_parts = []
     if 'n_agents' in config: config_parts.append(f"Agents: {config['n_agents']}")
     if 'num_trials' in config: config_parts.append(f"Trials: {config['num_trials']}")
@@ -38,13 +36,11 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     
-    # Title and subtitle
     fig.suptitle("Effect of Communication Frequency on Performance", fontsize=14, fontweight='bold', y=0.98)
     if config_text:
         fig.text(0.5, 0.94, config_text, ha='center', fontsize=10, 
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
     
-    # Extract data with error bars
     costs = [r['cost_mean'] for r in results]
     cost_stds = [r.get('cost_std', 0) for r in results]
     replans = [r['replan_mean'] for r in results]
@@ -59,7 +55,6 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     times = [r['time_mean'] for r in results]
     time_stds = [r.get('time_std', 0) for r in results]
     
-    # Find optimal
     opt_idx = np.argmin(costs)
     opt_steps = frequencies_steps[opt_idx]
     
@@ -104,7 +99,6 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     ax3.axhline(y=10, color='orange', linestyle=':', linewidth=1.5, alpha=0.7, label='Safe zone (>10px)')
     ax3.axvline(x=opt_steps, color='red', linestyle='--', alpha=0.7)
     ax3.scatter([opt_steps], [avg_separations[opt_idx]], color='red', s=150, zorder=5, marker='*')
-    # Removed: Light green "Safe clearance" shading (was unnecessary visual clutter)
     ax3.set_xlabel("Steps per Communication", fontsize=11)
     ax3.set_ylabel("Average Clearance (px)", fontsize=11)
     ax3.set_title("Average Agent Separation (higher = safer)", fontweight='bold')
@@ -113,21 +107,21 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     y_max = max(avg_separations) + max(avg_separation_stds) + 5
     ax3.set_ylim(bottom=min(0, min(avg_separations) - max(avg_separation_stds) - 2), top=y_max)
     
-    # Plot 4: Collision Analysis - CLEANED UP
+    # Plot 4: Collision Analysis 
     ax4 = axes[1, 1]
-    ax4_twin = ax4.twinx()  # Create twin axis for collision rate
+    ax4_twin = ax4.twinx()  
     
-    # Ensure collision counts are never negative (fix data issue)
+    # Ensure collision counts are never negative 
     collision_counts_clean = [max(0, c) for c in collision_counts]
     collision_count_stds_clean = [max(0, s) for s in collision_count_stds]
     
-    # Bar chart for collision count - simplified (solid color, clean look)
+    # Bar chart for collision count 
     bars = ax4.bar(frequencies_steps, collision_counts_clean, width=3, 
                    color='#8B0000', alpha=1.0, label='Collision Count', 
                    yerr=collision_count_stds_clean,
                    capsize=3, error_kw={'linewidth': 1.5, 'ecolor': 'black'})
     
-    # Line plot for collision rate - NO 'x' markers, cleaner line
+    # Line plot for collision rate 
     line = ax4_twin.plot(frequencies_steps, collision_rates, 
                          color='red', linewidth=2.5, label='Collision Rate (%)', zorder=10)
     
@@ -139,16 +133,13 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
     ax4.tick_params(axis='y', labelcolor='#8B0000')
     ax4_twin.tick_params(axis='y', labelcolor='red')
     
-    # Combine legends
     lines1, labels1 = ax4.get_legend_handles_labels()
     lines2, labels2 = ax4_twin.get_legend_handles_labels()
     ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
     ax4.grid(True, alpha=0.3, axis='x')
     
-    # Set y-axis minimum to 0 for collision count
     ax4.set_ylim(bottom=0)
     
-    # Highlight zero collision zone (only if there are actual zero collisions)
     if min(collision_counts_clean) == 0:
         zero_collision_steps = [f for f, c in zip(frequencies_steps, collision_counts_clean) if c == 0]
         if zero_collision_steps:
@@ -157,11 +148,9 @@ def plot_frequency_sweep(frequencies_steps, results, save_path="results/frequenc
                              min(zero_collision_steps), max(zero_collision_steps),
                              alpha=0.1, color='green', label='Zero collision zone')
     
-    # Convert optimal steps to Hz for display
     from src.config import SIMULATION_FPS
     opt_freq_hz = SIMULATION_FPS / opt_steps if opt_steps > 0 else 0
     
-    # Optimal result at bottom
     opt_text = (f"★ Optimal: {opt_steps} steps/comm ({opt_freq_hz:.2f} Hz) | "
                 f"Cost={costs[opt_idx]:.1f} | Avg Safety={avg_separations[opt_idx]:.1f}px | "
                 f"Replans={replans[opt_idx]:.1f} | Collisions={collision_counts[opt_idx]:.1f} ({collision_rates[opt_idx]:.0f}%)")
@@ -457,8 +446,6 @@ def plot_cost_landscape_freq_msg(freq_values, msg_length_values, cost_matrix,
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
-    # Transpose cost_matrix to match meshgrid shape
-    # cost_matrix comes in as (msg_lengths, freq_steps) but meshgrid creates (freq_steps, msg_lengths)
     cost_matrix_T = cost_matrix.T
     
     im = ax.imshow(cost_matrix_T, aspect='auto', origin='lower',
@@ -475,14 +462,12 @@ def plot_cost_landscape_freq_msg(freq_values, msg_length_values, cost_matrix,
         title += f"\n{config_text}"
     ax.set_title(title, fontsize=12)
     
-    # Find and mark minimum (using original cost_matrix orientation)
-    # cost_matrix is [msg_idx, freq_idx], so min_idx[0] = msg, min_idx[1] = freq
+    # Find and mark minimum 
     min_idx = np.unravel_index(np.argmin(cost_matrix), cost_matrix.shape)
     min_msg = msg_length_values[min_idx[0]]
     min_freq = freq_values[min_idx[1]]
     min_cost = cost_matrix[min_idx]
     
-    # Convert freq steps to Hz for display
     from src.config import SIMULATION_FPS
     min_freq_hz = SIMULATION_FPS / min_freq if min_freq > 0 else 0
     
@@ -491,7 +476,7 @@ def plot_cost_landscape_freq_msg(freq_values, msg_length_values, cost_matrix,
     ax.plot(min_msg, min_freq, 'w*', markersize=12)
     ax.legend(loc='upper right', fontsize=10)
     
-    # Contours (use transposed matrix to match meshgrid shape)
+    # Contours 
     X, Y = np.meshgrid(msg_length_values, freq_values)
     contours = ax.contour(X, Y, cost_matrix_T, levels=6, colors='black', alpha=0.3)
     ax.clabel(contours, inline=True, fontsize=8)
@@ -524,7 +509,6 @@ def plot_2d_sweep_details(freq_steps, msg_lengths, results_matrix,
     if config is None:
         config = {}
     
-    # Build config text
     config_parts = []
     if 'n_agents' in config: config_parts.append(f"Agents: {config['n_agents']}")
     if 'num_seeds' in config: config_parts.append(f"Seeds: {config['num_seeds']}")
@@ -538,7 +522,6 @@ def plot_2d_sweep_details(freq_steps, msg_lengths, results_matrix,
         fig.text(0.5, 0.94, config_text, ha='center', fontsize=10,
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
     
-    # Convert freq steps to Hz for axis labels
     from src.config import SIMULATION_FPS
     freq_hz = SIMULATION_FPS / np.array(freq_steps)
     
@@ -551,7 +534,7 @@ def plot_2d_sweep_details(freq_steps, msg_lengths, results_matrix,
     
     # Plot 1: Cost Heatmap
     ax1 = axes[0, 0]
-    cost_T = cost_matrix.T  # Transpose for plotting
+    cost_T = cost_matrix.T  
     im1 = ax1.imshow(cost_T, aspect='auto', origin='lower',
                      extent=[msg_lengths[0], msg_lengths[-1], freq_steps[0], freq_steps[-1]],
                      cmap='RdYlGn_r')
@@ -594,7 +577,7 @@ def plot_2d_sweep_details(freq_steps, msg_lengths, results_matrix,
     
     # Plot 4: Collision Rate Heatmap
     ax4 = axes[1, 1]
-    coll_T = results_matrix['collision_rate'].T * 100  # Convert to percentage
+    coll_T = results_matrix['collision_rate'].T * 100  
     im4 = ax4.imshow(coll_T, aspect='auto', origin='lower',
                      extent=[msg_lengths[0], msg_lengths[-1], freq_steps[0], freq_steps[-1]],
                      cmap='RdYlGn_r', vmin=0, vmax=100)
@@ -657,7 +640,7 @@ def plot_comparison(result_no_comm, result_with_comm, save_path="results/compari
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
     
     scenarios = ['No Communication\n(Baseline)', 'Optimal Policy\n(Communication ON)']
-    colors = ['#D32F2F', '#388E3C']  # Red for baseline, green for optimal
+    colors = ['#D32F2F', '#388E3C'] 
     
     # Extract data
     costs = [result_no_comm['cost_mean'], result_with_comm['cost_mean']]
@@ -688,7 +671,6 @@ def plot_comparison(result_no_comm, result_with_comm, save_path="results/compari
     ax1.set_xticks(x)
     ax1.set_xticklabels(scenarios)
     ax1.grid(True, alpha=0.3, axis='y')
-    # Add value labels
     for i, (bar, val, std) in enumerate(zip(bars1, costs, cost_stds)):
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height + std,
@@ -881,7 +863,7 @@ def plot_msg_length_sweep(msg_lengths, results, save_path="results/msg_length_sw
     ax2.legend(fontsize=9)
     ax2.grid(True, alpha=0.3)
     
-    # Plot 3: Average Separation (match frequency_sweep style)
+    # Plot 3: Average Separation 
     ax3 = axes[1, 0]
     ax3.plot(msg_lengths, avg_separations, marker='^', color='green', linewidth=2, label='Mean')
     ax3.fill_between(msg_lengths, np.array(avg_separations) - np.array(avg_separation_stds),
@@ -894,7 +876,6 @@ def plot_msg_length_sweep(msg_lengths, results, save_path="results/msg_length_sw
     if 0 in msg_lengths:
         zero_idx = list(msg_lengths).index(0)
         ax3.scatter([0], [avg_separations[zero_idx]], color='blue', s=100, zorder=5, marker='D')
-    # Removed: Light green "Safe clearance" shading (was unnecessary visual clutter)
     ax3.set_xlabel("Message Length (waypoints)", fontsize=11)
     ax3.set_ylabel("Average Clearance (px)", fontsize=11)
     ax3.set_title("Average Agent Separation (higher = safer)", fontweight='bold')
@@ -911,14 +892,13 @@ def plot_msg_length_sweep(msg_lengths, results, save_path="results/msg_length_sw
     collision_counts_clean = [max(0, c) for c in collision_counts]
     collision_count_stds_clean = [max(0, s) for s in collision_count_stds]
     
-    # Bar chart for collision count - solid color, clean look
     width = max(msg_lengths) * 0.03 if max(msg_lengths) > 0 else 0.5
     bars = ax4.bar(msg_lengths, collision_counts_clean, width=width, 
                    color='#8B0000', alpha=1.0, label='Collision Count',
                    yerr=collision_count_stds_clean,
                    capsize=3, error_kw={'linewidth': 1.5, 'ecolor': 'black'})
     
-    # Line plot for collision rate - NO 'x' markers, cleaner line
+    # Line plot for collision rate 
     line = ax4_twin.plot(msg_lengths, collision_rates, 
                          color='red', linewidth=2.5, label='Collision Rate (%)', zorder=10)
     
@@ -934,13 +914,11 @@ def plot_msg_length_sweep(msg_lengths, results, save_path="results/msg_length_sw
     ax4.tick_params(axis='y', labelcolor='#8B0000')
     ax4_twin.tick_params(axis='y', labelcolor='red')
     
-    # Combine legends
     lines1, labels1 = ax4.get_legend_handles_labels()
     lines2, labels2 = ax4_twin.get_legend_handles_labels()
     ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
     ax4.grid(True, alpha=0.3, axis='x')
     
-    # Set y-axis minimum to 0
     ax4.set_ylim(bottom=0)
     
     # Summary

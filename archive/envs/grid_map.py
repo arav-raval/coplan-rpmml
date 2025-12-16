@@ -5,7 +5,6 @@ def ascii_to_segments(grid, cell=20):
     """
     H, W = len(grid), len(grid[0])
     segs = []
-    # simple: draw cell borders for '#' cells
     for r in range(H):
         for c in range(W):
             if grid[r][c] != '#': continue
@@ -14,5 +13,4 @@ def ascii_to_segments(grid, cell=20):
                      ((x+cell, y), (x+cell, y+cell)),
                      ((x+cell, y+cell), (x, y+cell)),
                      ((x, y+cell), (x, y))]
-    # (optional) merge colinear segments later
     return segs

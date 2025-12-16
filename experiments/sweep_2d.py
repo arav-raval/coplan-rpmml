@@ -19,14 +19,6 @@ def main():
     print("=" * 75)
     print("2D COST LANDSCAPE: FREQUENCY × MESSAGE LENGTH")
     print("=" * 75)
-    print("""
-    WHAT WE'RE TESTING:
-    - Simultaneously varying frequency AND message length
-    - Looking for the optimal combination
-    - Identifying trade-offs between the two parameters
-    
-    QUESTION: What (frequency, msg_length) pair minimizes cost?
-    """)
     
     # Get configuration
     n_agents = EXPERIMENT_CONFIG['n_agents']
@@ -51,9 +43,9 @@ def main():
     
     # Generate parameter grids
     freq_steps = np.linspace(freq_min, freq_max, freq_num, dtype=int)
-    freq_steps = sorted(set(freq_steps))  # Remove duplicates
+    freq_steps = sorted(set(freq_steps))  
     msg_lengths = np.linspace(msg_min, msg_max, msg_num, dtype=int)
-    msg_lengths = sorted(set(msg_lengths))  # Remove duplicates
+    msg_lengths = sorted(set(msg_lengths))  
     
     # Initialize matrices for all metrics
     cost_matrix = np.zeros((len(msg_lengths), len(freq_steps)))

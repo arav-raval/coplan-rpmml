@@ -1,0 +1,12 @@
+{
+  "total_timesteps": 12000,
+  "n_agents": 4,
+  "n_envs": 4,
+  "learning_rate": 0.0003,
+  "n_steps": 512,
+  "batch_size": 128,
+  "gamma": 0.98,
+  "ent_coef": 0.02,
+  "device": "cuda",
+  "start_time": "2025-12-15T16:46:25.035046"
+}

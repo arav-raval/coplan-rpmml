@@ -14,13 +14,13 @@ def main():
     print("=" * 60)
     
     # Parameters to sweep
-    frequencies = np.linspace(0.2, 5.0, 15)  # 0.2 Hz to 5 Hz
+    frequencies = np.linspace(0.2, 5.0, 15)  
     
     # Fixed parameters
-    comm_range = 250.0      # Fixed: agents can hear each other within 250px
-    msg_length = 10         # Fixed: share 10 waypoints per message
-    n_agents = 4            # Fixed: 4 agents in simulation
-    num_trials = 10         # Run 10 trials per frequency value
+    comm_range = 250.0      
+    msg_length = 10         
+    n_agents = 4            
+    num_trials = 10         
     
     results = []
     
@@ -45,9 +45,7 @@ def main():
         
         result['frequency'] = freq
         results.append(result)
-    # In sweep_frequency.py, update the plot call:
 
-    # Store config for plotting
     config = {
         'n_agents': n_agents,
         'num_trials': num_trials,
@@ -55,11 +53,9 @@ def main():
         'msg_length': msg_length,
     }
     
-    # Generate plot with config
     print("\nGenerating plots...")
     plot_frequency_sweep(frequencies, results, config=config)
     
-    # Identify plateaus
     costs = [r['cost_mean'] for r in results]
     plateaus = identify_plateaus(frequencies, costs)
     

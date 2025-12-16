@@ -131,29 +131,48 @@ def run_simulation(
     n_agents: int = DEFAULT_NUM_AGENTS,
     seed: int = 5,
     max_time: float = 30.0,
-    verbose: bool = False
+    verbose: bool = False,
+    # NEW: Per-agent parameters for MARL (optional, for backward compatibility)
+    agent_broadcast_intervals: list = None,
+    agent_msg_lengths: list = None,
 ) -> SimulationMetrics:
     """
     Run a single headless simulation with N agents.
     
     Args:
         comm_enabled: Whether agents communicate
-        broadcast_interval_steps: Steps between broadcasts (smaller = more frequent)
+        broadcast_interval_steps: Steps between broadcasts (global, used if agent_broadcast_intervals is None)
         comm_range: Distance at which agents can communicate
-        msg_length: Number of waypoints to share per message (capped at MAX_MSG_LENGTH_STEPS)
+        msg_length: Number of waypoints per message (global, used if agent_msg_lengths is None)
         n_agents: Number of agents in simulation
         seed: Random seed for reproducibility
         max_time: Maximum simulation time before timeout
         verbose: Print status messages
+        agent_broadcast_intervals: Per-agent broadcast intervals (list of n_agents ints, optional)
+        agent_msg_lengths: Per-agent message lengths (list of n_agents ints, optional)
         
     Returns:
         SimulationMetrics with all collected data
     """
+    # Handle per-agent parameters (backward compatibility)
+    if agent_broadcast_intervals is None:
+        agent_broadcast_intervals = [broadcast_interval_steps] * n_agents
+    if agent_msg_lengths is None:
+        agent_msg_lengths = [msg_length] * n_agents
+    
+    # Validate per-agent parameter lengths
+    if len(agent_broadcast_intervals) != n_agents:
+        raise ValueError(f"agent_broadcast_intervals must have length {n_agents}, got {len(agent_broadcast_intervals)}")
+    if len(agent_msg_lengths) != n_agents:
+        raise ValueError(f"agent_msg_lengths must have length {n_agents}, got {len(agent_msg_lengths)}")
+    
     # Warn if message length exceeds prediction horizon (information beyond horizon is irrelevant)
-    if msg_length > MAX_MSG_LENGTH_STEPS:
-        if verbose:
-            print(f"  [WARNING] msg_length={msg_length} exceeds MAX_MSG_LENGTH_STEPS={MAX_MSG_LENGTH_STEPS}")
-            print(f"           Information beyond prediction horizon is irrelevant. Capping to {MAX_MSG_LENGTH_STEPS}.")
+    for i, msg_len in enumerate(agent_msg_lengths):
+        if msg_len > MAX_MSG_LENGTH_STEPS:
+            if verbose:
+                print(f"  [WARNING] Agent {i} msg_length={msg_len} exceeds MAX_MSG_LENGTH_STEPS={MAX_MSG_LENGTH_STEPS}")
+                print(f"           Information beyond prediction horizon is irrelevant. Capping to {MAX_MSG_LENGTH_STEPS}.")
+    
     # Use configured cooldown value (not tied to communication frequency)
     replan_cooldown_value = REPLAN_COOLDOWN_STEPS
     
@@ -170,6 +189,11 @@ def run_simulation(
         agent = Agent(space, start, goal, static_obstacles,
                       (SCREEN_WIDTH, SCREEN_HEIGHT), color)
         agent.id = i
+        # Store per-agent communication parameters
+        agent.broadcast_interval = agent_broadcast_intervals[i]
+        agent.msg_length = agent_msg_lengths[i]
+        agent.messages_sent_recent = 0  # Track for observations
+        agent.replans_recent = 0
         agents.append(agent)
     
     # Initial planning
@@ -192,13 +216,16 @@ def run_simulation(
         return metrics
     
     # Convert broadcast_interval_steps to Hz for MetricsCollector (for cost calculation)
-    broadcast_frequency_hz = SIMULATION_FPS / broadcast_interval_steps if broadcast_interval_steps > 0 else 0.0
+    # Use average across all agents for global metrics
+    avg_broadcast_interval = sum(agent_broadcast_intervals) / len(agent_broadcast_intervals)
+    avg_msg_length = sum(agent_msg_lengths) / len(agent_msg_lengths)
+    broadcast_frequency_hz = SIMULATION_FPS / avg_broadcast_interval if avg_broadcast_interval > 0 else 0.0
     
-    # Metrics collection (uses first two agents for backward compatibility)
+    # Metrics collection (uses average params for global cost calculation)
     collector = MetricsCollector(
         broadcast_frequency=broadcast_frequency_hz,
         comm_range=comm_range,
-        msg_length=msg_length
+        msg_length=int(avg_msg_length)
     )
     
     # Per-agent cooldowns (in steps)
@@ -246,12 +273,15 @@ def run_simulation(
                 
                 # Check if enough steps have passed since last communication
                 pair = (min(i, j), max(i, j))
-                last_step = last_comm_step.get(pair, -broadcast_interval_steps)  # Allow communication on first check
+                
+                # Use minimum broadcast interval of the two agents (communication happens at faster rate)
+                min_broadcast_interval = min(agent_i.broadcast_interval, agent_j.broadcast_interval)
+                last_step = last_comm_step.get(pair, -min_broadcast_interval)  # Allow communication on first check
                 
                 comm_checks_total += 1
                 
                 # Bypass timing check if one agent is done (immediate notification needed)
-                timing_ok = (step_count - last_step) >= broadcast_interval_steps
+                timing_ok = (step_count - last_step) >= min_broadcast_interval
                 immediate_check_needed = agent_i_done or agent_j_done  # Stable agent = immediate check
                 
                 # Communicate if timing ok OR if immediate check needed
@@ -264,6 +294,12 @@ def run_simulation(
                     if distance < comm_range:
                         # Update last communication time for this pair
                         last_comm_step[pair] = step_count
+                        
+                        # Count this broadcast as a message (actual communication occurred)
+                        collector.record_message()
+                        # Track per-agent message counts for observations
+                        agent_i.messages_sent_recent += 1
+                        agent_j.messages_sent_recent += 1
                         
                         if predict_collision_pair(agent_i, agent_j, PREDICTION_HORIZON):
                             # Determine which agent should replan and if we should force it (bypass cooldown)
@@ -308,7 +344,9 @@ def run_simulation(
                                 # Gather paths from agents within communication range only
                                 # Include done agents as stationary obstacles (single point at their position)
                                 replanner_pos = replanner.body.position
-                                effective_msg_length = min(msg_length, MAX_MSG_LENGTH_STEPS) if msg_length > 0 else MAX_MSG_LENGTH_STEPS
+                                # Use replanner's own message length setting
+                                replanner_msg_len = replanner.msg_length
+                                effective_msg_length = min(replanner_msg_len, MAX_MSG_LENGTH_STEPS) if replanner_msg_len > 0 else MAX_MSG_LENGTH_STEPS
                                 obstacles = []
                                 for k, other in enumerate(agents):
                                     if k != replanner_idx:
@@ -333,6 +371,7 @@ def run_simulation(
                                     success = replanner.replan(dynamic_obstacles=obstacles)
                                     if success:
                                         collector.record_replan()
+                                        replanner.replans_recent += 1  # Track for observations
                                     # Set cooldown from config (not tied to communication frequency)
                                     replan_cooldowns[replanner_idx] = replan_cooldown_value
                                     # Don't set cooldown on failure - allow immediate retry

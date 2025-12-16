@@ -1,4 +1,3 @@
-# src/world/physics.py
 """Physics world setup using pymunk."""
 
 import pymunk

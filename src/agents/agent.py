@@ -51,11 +51,7 @@ class Agent:
             print(f"  FAILED to find path.")
 
     def replan(self, dynamic_obstacles=None, max_retries=3):
-        """Replan from current position, optionally avoiding other paths.
-        
-        Uses more RRT iterations when replanning (especially with dynamic obstacles)
-        and retries with increasing iterations if initial attempt fails.
-        
+        """
         Args:
             dynamic_obstacles: List of paths to avoid (from other agents).
             max_retries: Maximum number of retry attempts with more iterations.
@@ -64,10 +60,9 @@ class Agent:
             True if replanning succeeded, False otherwise.
         """
         current_pos = self.body.position
-        
-        # Try with increasing iterations (more iterations for harder cases)
+
         for attempt in range(max_retries + 1):
-            iterations = RRT_ITERATIONS_REPLAN * (attempt + 1)  # 1000, 2000, 3000, ...
+            iterations = RRT_ITERATIONS_REPLAN * (attempt + 1)  
             
             new_planner = RRTPlanner(
                 current_pos, self.goal,
@@ -90,23 +85,19 @@ class Agent:
                 return True
         
         agent_id = getattr(self, 'id', '?')
-        print(f"  ⚠️  Agent {agent_id} replan FAILED after {max_retries+1} attempts")
-        
-        # Fallback: insert current position as "wait" waypoints
+        print(f"    Agent {agent_id} replan FAILED after {max_retries+1} attempts")
+            
         if self.path and self.path_index < len(self.path):
             current_pos = self.body.position
-            # Insert current position multiple times to create a waiting period
             wait_waypoints = [current_pos] * REPLAN_WAIT_STEPS
-            
-            # Insert wait waypoints at current position in path
             self.path = (self.path[:self.path_index] + 
                         wait_waypoints + 
                         self.path[self.path_index:])
             
-            print(f"  🛑 Agent {agent_id} WAITING (inserted {len(wait_waypoints)} wait waypoints)")
-            return True  # Waiting counts as successful collision avoidance
+            print(f"    Agent {agent_id} WAITING (inserted {len(wait_waypoints)} wait waypoints)")
+            return True  
         else:
-            print(f"  ⚠️  Agent {agent_id} has no path to insert wait - keeping old path")
+            print(f"    Agent {agent_id} has no path to insert wait - keeping old path")
             return False
 
     def update(self):

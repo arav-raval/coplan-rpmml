@@ -1,5 +1,3 @@
-"""RRT (Rapidly-exploring Random Tree) path planner."""
-
 import pymunk
 import random
 from src.config import RRT_ITERATIONS, RRT_STEP_SIZE, RRT_GOAL_BIAS, AVOIDANCE_RADIUS
@@ -27,7 +25,7 @@ class RRTPlanner:
         self.nodes = [self.start_node]
         self.static_obstacles = static_obstacles
         self.bounds = bounds
-        self.dynamic_obstacles = []  # Paths from other agents
+        self.dynamic_obstacles = [] 
         self.max_iterations = max_iterations if max_iterations is not None else RRT_ITERATIONS
 
     def set_dynamic_obstacles(self, paths):
@@ -45,14 +43,14 @@ class RRTPlanner:
             List of pymunk.Vec2d waypoints, or None if no path found.
         """
         for _ in range(self.max_iterations):
-            # Sample random point (with goal bias)
+            # Sample random point 
             if random.random() < RRT_GOAL_BIAS:
                 rand_pos = self.goal_node.pos
             else:
                 rand_pos = (random.randint(0, self.bounds[0]),
                             random.randint(0, self.bounds[1]))
 
-            # Find nearest node in tree
+            # Find nearest node 
             nearest_node = min(
                 self.nodes, 
                 key=lambda n: (n.pos - rand_pos).length_squared
@@ -77,7 +75,7 @@ class RRTPlanner:
                         self.goal_node.parent = new_node
                         return self._reconstruct_path()
 
-        return None  # Failed to find path
+        return None
 
     def _is_collision_free(self, p1, p2):
         """Check if the line segment (p1, p2) is collision-free."""
@@ -86,7 +84,7 @@ class RRTPlanner:
             if obs.segment_query(p1, p2):
                 return False
 
-        # Check dynamic paths (other agents' communicated paths)
+        # Check dynamic paths 
         for path in self.dynamic_obstacles:
             for point in path:
                 line_vec = p2 - p1
@@ -95,7 +93,7 @@ class RRTPlanner:
                 # Find closest point on segment to the path point
                 point_vec = point - p1
                 t = line_vec.dot(point_vec) / line_vec.length_squared
-                t = max(0, min(1, t))  # Clamp to segment
+                t = max(0, min(1, t))  
                 closest = p1 + t * line_vec
                 if closest.get_distance(point) < AVOIDANCE_RADIUS:
                     return False
@@ -108,4 +106,4 @@ class RRTPlanner:
         while curr:
             path.append(curr.pos)
             curr = curr.parent
-        return path[::-1]  # Reverse: start -> goal
+        return path[::-1]  

@@ -13,13 +13,11 @@ def main():
     print("COMMUNICATION RANGE SWEEP EXPERIMENT")
     print("=" * 60)
     
-    # Parameters to sweep
-    ranges = np.linspace(50, 400, 15)  # 50px to 400px
+    ranges = np.linspace(50, 400, 15)  
     
-    # Fixed parameters
-    frequency = 1.0         # Fixed: agents can replan once per second
-    msg_length = 10         # Fixed: share 10 waypoints per message
-    n_agents = 4            # Fixed: 4 agents in simulation
+    frequency = 1.0         
+    msg_length = 10         
+    n_agents = 4            
     num_trials = 10
     
     results = []
@@ -46,7 +44,6 @@ def main():
         result['range'] = r
         results.append(result)
     
-    # Store config for plotting
     config = {
         'n_agents': n_agents,
         'num_trials': num_trials,
@@ -64,7 +61,6 @@ def main():
     print("RESULTS INTERPRETATION")
     print("=" * 60)
     
-    # Find minimum range for zero collisions
     zero_collision_ranges = [ranges[i] for i, cr in enumerate(collision_rates) if cr == 0]
     if zero_collision_ranges:
         print(f"\n MINIMUM SAFE RANGE: {min(zero_collision_ranges):.0f}px")

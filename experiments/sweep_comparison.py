@@ -21,7 +21,7 @@ def run_comparison_sweep(quick=False, visualize=False):
     
     Args:
         quick: If True, use fewer seeds
-        visualize: If True, show visualization (not implemented for comparison)
+        visualize: If True, show visualization
     
     Returns:
         dict: Results from both scenarios
@@ -52,32 +52,32 @@ def run_comparison_sweep(quick=False, visualize=False):
     
     start_time = time.time()
     
-    # Scenario 1: No Communication (Baseline)
+    # BASELINE: No Communication
     print("=" * 75)
-    print("SCENARIO 1: NO COMMUNICATION (Baseline)")
+    print("NO COMMUNICATION (Baseline)")
     print("=" * 75)
     print("Running simulations with comm_enabled=False...")
     print()
     
     result_no_comm = run_batch_multiple_seeds(
         comm_enabled=False,
-        broadcast_interval_steps=999,  # Irrelevant when comm disabled
+        broadcast_interval_steps=999,  
         comm_range=comm_range,
-        msg_length=1,  # Irrelevant when comm disabled
+        msg_length=1,  
         n_agents=n_agents,
         num_seeds=num_seeds,
         verbose=False
     )
     
-    print(f"✓ Completed baseline (no communication)")
+    print(f"  Completed baseline (no communication)")
     print(f"  Cost: {result_no_comm['cost_mean']:.1f} ± {result_no_comm['cost_std']:.1f}")
     print(f"  Collisions: {result_no_comm['collision_count_mean']:.2f} ± {result_no_comm['collision_count_std']:.2f}")
     print(f"  Collision Rate: {result_no_comm['collision_rate']*100:.1f}%")
     print()
     
-    # Scenario 2: Optimal Communication Policy
+    # Optimal Communication Policy
     print("=" * 75)
-    print("SCENARIO 2: OPTIMAL COMMUNICATION POLICY")
+    print("OPTIMAL COMMUNICATION POLICY")
     print("=" * 75)
     print(f"Running simulations with optimal policy...")
     print(f"  Frequency: {opt_freq_steps} steps ({opt_freq_hz:.2f} Hz)")
@@ -94,7 +94,7 @@ def run_comparison_sweep(quick=False, visualize=False):
         verbose=False
     )
     
-    print(f"✓ Completed optimal policy")
+    print(f"  Completed optimal policy")
     print(f"  Cost: {result_with_comm['cost_mean']:.1f} ± {result_with_comm['cost_std']:.1f}")
     print(f"  Collisions: {result_with_comm['collision_count_mean']:.2f} ± {result_with_comm['collision_count_std']:.2f}")
     print(f"  Collision Rate: {result_with_comm['collision_rate']*100:.1f}%")
@@ -149,7 +149,7 @@ def run_comparison_sweep(quick=False, visualize=False):
           f"{(result_with_comm['collision_rate'] - result_no_comm['collision_rate'])*100:>13.1f}%")
     
     print()
-    print(f"✓ Comparison completed in {elapsed:.1f}s")
+    print(f" Comparison completed in {elapsed:.1f}s")
     
     # Generate plot
     print("\nGenerating comparison plot...")

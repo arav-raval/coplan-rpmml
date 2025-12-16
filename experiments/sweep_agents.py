@@ -17,7 +17,7 @@ def main():
     agent_counts = [2, 3, 4, 5, 6, 7, 8]
     
     # Fixed parameters
-    frequency = 1.5       # Using a "good" frequency from previous sweep
+    frequency = 1.5       
     comm_range = 250.0
     msg_length = 10
     num_trials = 10
